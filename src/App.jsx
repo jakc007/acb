@@ -16,7 +16,7 @@ export default function App() {
             <SignInButton mode="modal">
               <button className="w-full border rounded-2xl px-3 py-2">Prijavi se</button>
             </SignInButton>
-            <p className="text-xs text-neutral-500 mt-2">Uporabi Google ali email.</p>
+            <p className="text-xs text-neutral-500 mt-2">Uporabi Google ali e-pošto.</p>
           </div>
         </div>
       </SignedOut>
