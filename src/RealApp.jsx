@@ -1,13 +1,16 @@
 import React, { useMemo, useRef, useState, useEffect } from "react";
 import { Download, Plus, Trash2, Save, History, FileDown, Users, Settings, PackageSearch, UserCircle2, FileText } from "lucide-react";
+import { useUser } from "@clerk/clerk-react";
 
-// Full RealApp.jsx
-// - Fix: after "Shrani paket" opens History panel automatically
-// - Export modes: "interno" (podrobno, z izračuni) in "stranka" (čist račun brez profita/tečajev)
-// - Moji podatki za račun (ime, naslov, email, telefon)
-// - PDF per oseba ali ALL; pri "stranka" ne prikazujemo profita/tečajev niti poštnine posebej
+// RealApp.jsx – z oblačno sinhronizacijo prek Clerk (unsafeMetadata)
+// • Export načina: "interno" (z vsemi izračuni) in "stranka" (čist račun, brez profita/tečajev)
+// • Shranjevanje paketov lokalno + v Clerk (sinhronizacija med napravami za istega uporabnika)
+// • "Moji podatki" (glava računa) se sinhronizirajo v Clerk
 
 export default function RealApp() {
+  // Clerk – stanje uporabnika
+  const { isLoaded, isSignedIn, user } = useUser();
+
   // ==== Core state ====
   const [items, setItems] = useState(() => {
     const saved = localStorage.getItem("RACUN_DRAFT_ITEMS");
@@ -41,7 +44,7 @@ export default function RealApp() {
     return saved ? JSON.parse(saved) : {};
   });
 
-  // My invoice details (header on client PDF)
+  // Moji podatki za račun (glava na PDF za stranko)
   const [myInfo, setMyInfo] = useState(() => {
     const saved = localStorage.getItem("RACUN_MYINFO");
     return saved ? JSON.parse(saved) : { name: "", address: "", email: "", phone: "" };
@@ -61,7 +64,7 @@ export default function RealApp() {
   const [pkgName, setPkgName] = useState("");
   const [showHistory, setShowHistory] = useState(false);
 
-  // Persist draft
+  // Persist draft -> localStorage
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_ITEMS", JSON.stringify(items)); }, [items]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_PEOPLE", JSON.stringify(people)); }, [people]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_ORIGRATIO", String(origRatio)); }, [origRatio]);
@@ -70,6 +73,27 @@ export default function RealApp() {
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_RECEIVED", JSON.stringify(receivedMap)); }, [receivedMap]);
   useEffect(() => { localStorage.setItem("RACUN_MYINFO", JSON.stringify(myInfo)); }, [myInfo]);
   useEffect(() => { localStorage.setItem("RACUN_EXPORTMODE", exportMode); }, [exportMode]);
+
+  // === Clerk cloud load (ob prijavi) ===
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    const cloudPkgs = user?.unsafeMetadata?.packages;
+    if (Array.isArray(cloudPkgs)) setPackages(cloudPkgs);
+
+    const cloudInfo = user?.unsafeMetadata?.myInfo;
+    if (cloudInfo && typeof cloudInfo === "object") setMyInfo(cloudInfo);
+  }, [isLoaded, isSignedIn, user]);
+
+  // === Cloud autosave za "Moji podatki" (debounce) ===
+  useEffect(() => {
+    if (!isSignedIn) return;
+    const t = setTimeout(() => {
+      user.update({
+        unsafeMetadata: { ...(user.unsafeMetadata || {}), myInfo },
+      }).catch(() => {});
+    }, 400);
+    return () => clearTimeout(t);
+  }, [isSignedIn, user, myInfo]);
 
   // ==== Derived numbers (Excel parity) ====
   const totalWeight = useMemo(() => sum(items.map((r) => num(r.weight))), [items]); // B39
@@ -135,39 +159,40 @@ export default function RealApp() {
     setReceivedMap((m) => { const n = { ...m }; delete n[name]; return n; });
   };
 
-  // === Save current package to history ===
-  const savePackage = () => {
+  // === Save current package to history (local + cloud) ===
+  const savePackage = async () => {
     const name = pkgName?.trim() || `Paket ${new Date().toLocaleString()}`;
     const payload = {
-      id: uid(),
-      name,
-      createdAt: new Date().toISOString(),
-      items,
-      people,
-      origRatio,
-      myRatio,
-      shippingCNY,
-      derived: {
-        totalWeight,
-        totalCNY,
-        shippingEUR,
-        usdPerEur,
-        rateProfit,
-        grandTogether,
-        summaryByPerson,
-      },
+      id: uid(), name, createdAt: new Date().toISOString(),
+      items, people, origRatio, myRatio, shippingCNY,
+      derived: { totalWeight, totalCNY, shippingEUR, usdPerEur, rateProfit, grandTogether, summaryByPerson },
     };
     const next = [payload, ...packages];
     setPackages(next);
     localStorage.setItem("RACUN_PACKAGES", JSON.stringify(next));
     setPkgName("");
-    setShowHistory(true); // <-- prikažemo zgodovino takoj
+    setShowHistory(true);
+
+    if (isSignedIn) {
+      try {
+        await user.update({
+          unsafeMetadata: { ...(user.unsafeMetadata || {}), packages: next },
+        });
+      } catch (e) { /* noop */ }
+    }
   };
 
-  const deletePackage = (id) => {
+  const deletePackage = async (id) => {
     const next = packages.filter((p) => p.id !== id);
     setPackages(next);
     localStorage.setItem("RACUN_PACKAGES", JSON.stringify(next));
+    if (isSignedIn) {
+      try {
+        await user.update({
+          unsafeMetadata: { ...(user.unsafeMetadata || {}), packages: next },
+        });
+      } catch (e) { /* noop */ }
+    }
   };
 
   // === PDF export ===
@@ -181,7 +206,6 @@ export default function RealApp() {
     const selectedWho = exportSelection.all ? people.filter(Boolean) : exportSelection.who;
     if (!selectedWho.length) return alert("Izberi vsaj eno osebo ali ALL");
 
-    // Helper to render one block (section) as canvas and add to PDF (with slicing for multipage)
     async function addPrintableToPdf(pdf, node) {
       document.body.appendChild(node);
       const canvas = await html2canvas(node, { scale: 2 });
@@ -626,7 +650,7 @@ export default function RealApp() {
         )}
 
         <footer className="mt-10 text-center text-xs text-neutral-500">
-          Zgrajeno za Jakoba • Excel-parity izračuni • Lokalno shranjevanje • PDF export (ALL / osebe) • Interno & Za stranko
+          Zgrajeno za Jakoba • Excel-parity izračuni • Lokalno + oblak (Clerk) • PDF export (ALL / osebe) • Interno & Za stranko
         </footer>
       </div>
 
