@@ -14,6 +14,7 @@
     "lucide-react": "^0.469.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
+    "@clerk/clerk-react": "^5.3.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
@@ -23,6 +24,5 @@
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.10",
     "vite": "^5.4.2"
-    "@clerk/clerk-react": "^5.3.0"
   }
 }
