@@ -1,10 +1,14 @@
 import React, { useMemo, useRef, useState, useEffect } from "react";
-import { Download, Plus, Trash2, Save, History, FileDown, Users, Settings, PackageSearch, UserCircle2, FileText } from "lucide-react";
+import { Download, Plus, Trash2, Save, History, FileDown, Users, Settings, PackageSearch, UserCircle2, FileText, Eye } from "lucide-react";
 import { useUser } from "@clerk/clerk-react";
 
 // RealApp.jsx – z oblačno sinhronizacijo prek Clerk (unsafeMetadata)
-// • Export načina: "interno" (z vsemi izračuni) in "stranka" (čist račun, brez profita/tečajev)
-// • Shranjevanje paketov lokalno + v Clerk (sinhronizacija med napravami za istega uporabnika)
+// NOVO v tej verziji:
+// • "Pregled" shranjenega paketa (celoten pogled) + "Naloži v osnutek"
+// • Potrditev pred izbrisom paketa
+// • Avtomatsko številčenje računov (prefix + števec), vključeno v PDF "Za stranko"
+// • Export načina: "interno" (vse) in "stranka" (čist račun)
+// • Shranjevanje paketov lokalno + v Clerk za sinhronizacijo med napravami
 // • "Moji podatki" (glava računa) se sinhronizirajo v Clerk
 
 export default function RealApp() {
@@ -50,6 +54,11 @@ export default function RealApp() {
     return saved ? JSON.parse(saved) : { name: "", address: "", email: "", phone: "" };
   });
 
+  // Avtomatsko številčenje računov
+  const defaultPrefix = `${(myInfo?.name || "RAC").toString().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0,3)}-${new Date().getFullYear()}-`;
+  const [invPrefix, setInvPrefix] = useState(() => localStorage.getItem("RACUN_INV_PREFIX") || defaultPrefix);
+  const [invCounter, setInvCounter] = useState(() => Number(localStorage.getItem("RACUN_INV_COUNTER")) || 1);
+
   // Export mode: "interno" | "stranka"
   const [exportMode, setExportMode] = useState(() => {
     const saved = localStorage.getItem("RACUN_EXPORTMODE");
@@ -64,6 +73,9 @@ export default function RealApp() {
   const [pkgName, setPkgName] = useState("");
   const [showHistory, setShowHistory] = useState(false);
 
+  // Pregled shranjenega paketa
+  const [previewPkg, setPreviewPkg] = useState(null);
+
   // Persist draft -> localStorage
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_ITEMS", JSON.stringify(items)); }, [items]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_PEOPLE", JSON.stringify(people)); }, [people]);
@@ -73,6 +85,8 @@ export default function RealApp() {
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_RECEIVED", JSON.stringify(receivedMap)); }, [receivedMap]);
   useEffect(() => { localStorage.setItem("RACUN_MYINFO", JSON.stringify(myInfo)); }, [myInfo]);
   useEffect(() => { localStorage.setItem("RACUN_EXPORTMODE", exportMode); }, [exportMode]);
+  useEffect(() => { localStorage.setItem("RACUN_INV_PREFIX", invPrefix); }, [invPrefix]);
+  useEffect(() => { localStorage.setItem("RACUN_INV_COUNTER", String(invCounter)); }, [invCounter]);
 
   // === Clerk cloud load (ob prijavi) ===
   useEffect(() => {
@@ -82,6 +96,12 @@ export default function RealApp() {
 
     const cloudInfo = user?.unsafeMetadata?.myInfo;
     if (cloudInfo && typeof cloudInfo === "object") setMyInfo(cloudInfo);
+
+    const invCloud = user?.unsafeMetadata?.invoice;
+    if (invCloud && typeof invCloud === "object") {
+      if (typeof invCloud.prefix === "string") setInvPrefix(invCloud.prefix);
+      if (Number.isFinite(invCloud.counter)) setInvCounter(Number(invCloud.counter));
+    }
   }, [isLoaded, isSignedIn, user]);
 
   // === Cloud autosave za "Moji podatki" (debounce) ===
@@ -94,6 +114,17 @@ export default function RealApp() {
     }, 400);
     return () => clearTimeout(t);
   }, [isSignedIn, user, myInfo]);
+
+  // === Cloud autosave za invoice settings (debounce) ===
+  useEffect(() => {
+    if (!isSignedIn) return;
+    const t = setTimeout(() => {
+      user.update({
+        unsafeMetadata: { ...(user.unsafeMetadata || {}), invoice: { prefix: invPrefix, counter: invCounter } },
+      }).catch(() => {});
+    }, 400);
+    return () => clearTimeout(t);
+  }, [isSignedIn, user, invPrefix, invCounter]);
 
   // ==== Derived numbers (Excel parity) ====
   const totalWeight = useMemo(() => sum(items.map((r) => num(r.weight))), [items]); // B39
@@ -111,38 +142,10 @@ export default function RealApp() {
   }, [totalCNY, myRatio, origRatio]);
 
   // Line computations
-  const computedRows = useMemo(() => {
-    const wTotal = totalWeight || 1;
-    return items.map((r) => {
-      const cny = num(r.cny);
-      const weight = num(r.weight);
-      const eur = cny / safe(myRatio); // C = B/E35
-      const shipPart = (weight / wTotal) * shippingEUR; // D = (E/B39)*B42
-      const together = eur + shipPart; // G
-      const regular = together / safe(usdPerEur); // I = G / G35
-      const profit = together - regular; // J = G - I
-      const weightPct = wTotal ? (weight / wTotal) * 100 : 0; // F
-      return { ...r, eur, shipPart, together, regular, profit, weightPct };
-    });
-  }, [items, myRatio, shippingEUR, totalWeight, usdPerEur]);
+  const computedRows = useMemo(() => computeRows({ items, myRatio, shippingCNY, origRatio }), [items, myRatio, shippingCNY, origRatio]);
 
   // Summary per person
-  const summaryByPerson = useMemo(() => {
-    const map = new Map();
-    for (const p of people) map.set(p, 0);
-    for (const row of computedRows) {
-      const key = row.who?.trim();
-      if (!key) continue;
-      map.set(key, safe(map.get(key)) + row.together);
-    }
-    return people.map((p) => {
-      const eur = safe(map.get(p));
-      const minimum = eur / safe(usdPerEur);
-      const received = num(receivedMap[p]);
-      const due = eur - received;
-      return { who: p, eur, minimum, received, due };
-    });
-  }, [people, computedRows, usdPerEur, receivedMap]);
+  const summaryByPerson = useMemo(() => summarizeByPerson({ people, rows: computedRows, usdPerEur, receivedMap }), [people, computedRows, usdPerEur, receivedMap]);
 
   const grandTogether = useMemo(() => sum(computedRows.map((r) => r.together)), [computedRows]);
 
@@ -183,6 +186,7 @@ export default function RealApp() {
   };
 
   const deletePackage = async (id) => {
+    if (!confirm("Želite izbrisati shranjeni paket?")) return;
     const next = packages.filter((p) => p.id !== id);
     setPackages(next);
     localStorage.setItem("RACUN_PACKAGES", JSON.stringify(next));
@@ -193,6 +197,17 @@ export default function RealApp() {
         });
       } catch (e) { /* noop */ }
     }
+  };
+
+  const loadPackageToDraft = (p) => {
+    setItems(p.items || []);
+    setPeople(p.people || []);
+    setReceivedMap({});
+    setOrigRatio(p.origRatio);
+    setMyRatio(p.myRatio);
+    setShippingCNY(p.shippingCNY);
+    setShowHistory(false);
+    setPreviewPkg(null);
   };
 
   // === PDF export ===
@@ -329,9 +344,11 @@ export default function RealApp() {
       // ========== CLIENT PDF (Za stranko) ==========
       // One page per selected person; clean invoice-like layout without profit/tečaji
       let first = true;
+      let nextCounter = invCounter;
       for (const who of selectedWho) {
         const rows = computedRows.filter((r) => r.who?.trim() === who);
         const subTotal = rows.reduce((a, r) => a + r.together, 0);
+        const invoiceNo = `${invPrefix}${String(nextCounter).padStart(3, "0")}`;
 
         const section = document.createElement("div");
         section.style.padding = "24px";
@@ -348,6 +365,7 @@ export default function RealApp() {
             </div>
             <div style="text-align:right;">
               <div style="font-size:18px;font-weight:700;">Račun</div>
+              <div style="font-size:12px;opacity:0.8;">Račun št.: ${esc(invoiceNo)}</div>
               <div style="font-size:12px;opacity:0.8;">Datum: ${new Date().toLocaleDateString()}</div>
               <div style="font-size:12px;opacity:0.8;">Kupec: ${esc(who)}</div>
             </div>
@@ -394,7 +412,11 @@ export default function RealApp() {
         if (!first) pdf.addPage();
         await addPrintableToPdf(pdf, section);
         first = false;
+        nextCounter += 1; // povečaj za naslednji račun
       }
+
+      // po exportu posodobi števec
+      setInvCounter(nextCounter);
     }
 
     pdf.save(`izvoz_${exportMode}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.pdf`);
@@ -441,7 +463,7 @@ export default function RealApp() {
           </div>
         </section>
 
-        {/* My details for client invoice */}
+        {/* My details for client invoice + numbering */}
         <section className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="rounded-2xl bg-white p-4 shadow md:col-span-3">
             <div className="flex items-center gap-2 font-semibold mb-2"><UserCircle2 className="h-4 w-4"/>Moji podatki (glava računa – za stranko)</div>
@@ -462,6 +484,18 @@ export default function RealApp() {
                 <span className="text-neutral-700">E-pošta</span>
                 <input className="mt-1 w-full rounded-xl border px-3 py-2" value={myInfo.email} onChange={(e)=> setMyInfo((x)=> ({...x, email: e.target.value}))} placeholder="ime@domena.si"/>
               </label>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+              <label className="text-sm">
+                <span className="text-neutral-700">Prefix računa</span>
+                <input className="mt-1 w-full rounded-xl border px-3 py-2" value={invPrefix} onChange={(e)=> setInvPrefix(e.target.value)} placeholder="RAC-2025-"/>
+              </label>
+              <label className="text-sm">
+                <span className="text-neutral-700">Naslednja številka</span>
+                <input type="number" className="mt-1 w-full rounded-xl border px-3 py-2" value={invCounter} onChange={(e)=> setInvCounter(Number(e.target.value)||1)} />
+              </label>
+              <div className="text-sm flex items-end">Naslednji račun: <b className="ml-2">{invPrefix}{String(invCounter).padStart(3, "0")}</b></div>
             </div>
           </div>
         </section>
@@ -626,7 +660,11 @@ export default function RealApp() {
                         <div className="font-medium">{p.name}</div>
                         <div className="text-xs text-neutral-600">{new Date(p.createdAt).toLocaleString()}</div>
                       </div>
-                      <button className="p-2 text-red-600 hover:bg-red-50 rounded-xl" onClick={()=> deletePackage(p.id)}><Trash2 className="h-4 w-4"/></button>
+                      <div className="flex items-center gap-2">
+                        <button className="rounded-xl border px-2 py-1 text-sm flex items-center gap-1" onClick={()=> setPreviewPkg(p)}><Eye className="h-4 w-4"/>Pregled</button>
+                        <button className="rounded-xl border px-2 py-1 text-sm" onClick={()=> loadPackageToDraft(p)}>Naloži v osnutek</button>
+                        <button className="p-2 text-red-600 hover:bg-red-50 rounded-xl" onClick={()=> deletePackage(p.id)}><Trash2 className="h-4 w-4"/></button>
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-sm mt-2">
                       <div><b>Skupaj EUR:</b> {fmt(p.derived.grandTogether)}</div>
@@ -649,8 +687,78 @@ export default function RealApp() {
           </section>
         )}
 
+        {/* PREVIEW OVERLAY */}
+        {previewPkg && (
+          <section className="fixed inset-0 bg-black/40 z-[60] flex justify-center items-center p-4" onClick={()=> setPreviewPkg(null)}>
+            <div className="bg-white rounded-2xl shadow max-w-5xl w-full max-h-[90vh] overflow-auto" onClick={(e)=> e.stopPropagation()}>
+              <div className="p-4 border-b flex items-center justify-between">
+                <div>
+                  <div className="font-semibold">{previewPkg.name}</div>
+                  <div className="text-xs text-neutral-600">{new Date(previewPkg.createdAt).toLocaleString()}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button className="rounded-xl border px-3 py-1" onClick={()=> { loadPackageToDraft(previewPkg); }}>Naloži v osnutek</button>
+                  <button className="rounded-xl border px-3 py-1" onClick={()=> setPreviewPkg(null)}>Zapri</button>
+                </div>
+              </div>
+              <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="text-sm">
+                  <div className="font-medium mb-1">Parametri</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>Orig(B35): <b>{fmt(previewPkg.origRatio)}</b></div>
+                    <div>Moj(E35): <b>{fmt(previewPkg.myRatio)}</b></div>
+                    <div>USD/EUR (G35): <b>{fmt(previewPkg.derived.usdPerEur)}</b></div>
+                    <div>Poštnina CNY: <b>{fmt(previewPkg.shippingCNY)}</b></div>
+                    <div>Poštnina EUR: <b>{fmt(previewPkg.derived.shippingEUR)}</b></div>
+                  </div>
+                </div>
+                <div className="text-sm">
+                  <div className="font-medium mb-1">Povzetek</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>Skupaj EUR: <b>{fmt(previewPkg.derived.grandTogether)}</b></div>
+                    <div>Skupna teža: <b>{fmt(previewPkg.derived.totalWeight)} g</b></div>
+                    <div>Skupaj CNY: <b>{fmt(previewPkg.derived.totalCNY)}</b></div>
+                    <div>"Zaslužek" (teč.): <b>{fmt(previewPkg.derived.rateProfit)}</b></div>
+                  </div>
+                </div>
+              </div>
+              <div className="px-4 pb-4">
+                <div className="font-medium mb-2">Postavke</div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-neutral-100 text-neutral-700">
+                      <tr>
+                        <Th>Artikel</Th>
+                        <Th className="text-right">CNY</Th>
+                        <Th className="text-right">EUR</Th>
+                        <Th className="text-right">Teža</Th>
+                        <Th className="text-right">Poštnina EUR</Th>
+                        <Th className="text-right">Skupaj EUR</Th>
+                        <Th>Kdo</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {computeRows({ items: previewPkg.items, myRatio: previewPkg.myRatio, shippingCNY: previewPkg.shippingCNY, origRatio: previewPkg.origRatio }).map((r) => (
+                        <tr key={r.id} className="border-b last:border-0">
+                          <Td>{r.artikel}</Td>
+                          <Td className="text-right">{fmt(r.cny)}</Td>
+                          <Td className="text-right">{fmt(r.eur)}</Td>
+                          <Td className="text-right">{fmt(r.weight)}</Td>
+                          <Td className="text-right">{fmt(r.shipPart)}</Td>
+                          <Td className="text-right font-medium">{fmt(r.together)}</Td>
+                          <Td>{r.who}</Td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
         <footer className="mt-10 text-center text-xs text-neutral-500">
-          Zgrajeno za Jakoba • Excel-parity izračuni • Lokalno + oblak (Clerk) • PDF export (ALL / osebe) • Interno & Za stranko
+          Zgrajeno za Jakoba • Excel-parity izračuni • Lokalno + oblak (Clerk) • PDF export (ALL / osebe) • Interno & Za stranko • Pregled zgodovine • Avtomatsko številčenje računov
         </footer>
       </div>
 
@@ -687,3 +795,37 @@ function sum(arr) { return arr.reduce((a,b)=> a + (Number.isFinite(b)? b : 0), 0
 function fmt(n) { return (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }); }
 function uid() { return Math.random().toString(36).slice(2, 10); }
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c)=> ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+
+function computeRows({ items, myRatio, shippingCNY, origRatio }) {
+  const wTotal = sum(items.map((r) => num(r.weight))) || 1;
+  const shippingEUR = shippingCNY ? shippingCNY / safe(myRatio) : 0;
+  const usdPerEur = safe(origRatio) / safe(myRatio);
+  return items.map((r) => {
+    const cny = num(r.cny);
+    const weight = num(r.weight);
+    const eur = cny / safe(myRatio);
+    const shipPart = (weight / wTotal) * shippingEUR;
+    const together = eur + shipPart;
+    const regular = together / safe(usdPerEur);
+    const profit = together - regular;
+    const weightPct = wTotal ? (weight / wTotal) * 100 : 0;
+    return { ...r, eur, shipPart, together, regular, profit, weightPct };
+  });
+}
+
+function summarizeByPerson({ people, rows, usdPerEur, receivedMap }) {
+  const map = new Map();
+  for (const p of people) map.set(p, 0);
+  for (const row of rows) {
+    const key = row.who?.trim();
+    if (!key) continue;
+    map.set(key, safe(map.get(key)) + row.together);
+  }
+  return people.map((p) => {
+    const eur = safe(map.get(p));
+    const minimum = eur / safe(usdPerEur);
+    const received = num(receivedMap[p]);
+    const due = eur - received;
+    return { who: p, eur, minimum, received, due };
+  });
+}
