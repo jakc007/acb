@@ -1,7 +1,14 @@
 import React, { useMemo, useRef, useState, useEffect } from "react";
-import { Download, Plus, Trash2, Save, History, FileDown, Users, Settings, PackageSearch } from "lucide-react";
+import { Download, Plus, Trash2, Save, History, FileDown, Users, Settings, PackageSearch, UserCircle2, FileText } from "lucide-react";
 
-export default function App() {
+// Full RealApp.jsx
+// - Fix: after "Shrani paket" opens History panel automatically
+// - Export modes: "interno" (podrobno, z izračuni) in "stranka" (čist račun brez profita/tečajev)
+// - Moji podatki za račun (ime, naslov, email, telefon)
+// - PDF per oseba ali ALL; pri "stranka" ne prikazujemo profita/tečajev niti poštnine posebej
+
+export default function RealApp() {
+  // ==== Core state ====
   const [items, setItems] = useState(() => {
     const saved = localStorage.getItem("RACUN_DRAFT_ITEMS");
     return saved ? JSON.parse(saved) : [
@@ -14,24 +21,39 @@ export default function App() {
     return saved ? JSON.parse(saved) : ["miha", "živa", "andreja"];
   });
 
+  // Exchange rates & shipping
   const [origRatio, setOrigRatio] = useState(() => {
     const saved = localStorage.getItem("RACUN_DRAFT_ORIGRATIO");
-    return saved ? Number(saved) : Number((800 / 101.37).toFixed(6));
+    return saved ? Number(saved) : Number((800 / 101.37).toFixed(6)); // primer iz Excela B35
   });
   const [myRatio, setMyRatio] = useState(() => {
     const saved = localStorage.getItem("RACUN_DRAFT_MYRATIO");
-    return saved ? Number(saved) : 6.5;
+    return saved ? Number(saved) : 6.5; // E35
   });
   const [shippingCNY, setShippingCNY] = useState(() => {
     const saved = localStorage.getItem("RACUN_DRAFT_SHIPCNY");
-    return saved ? Number(saved) : 256.2;
+    return saved ? Number(saved) : 256.2; // B41
   });
 
+  // Received amounts per person (prejeto)
   const [receivedMap, setReceivedMap] = useState(() => {
     const saved = localStorage.getItem("RACUN_DRAFT_RECEIVED");
     return saved ? JSON.parse(saved) : {};
   });
 
+  // My invoice details (header on client PDF)
+  const [myInfo, setMyInfo] = useState(() => {
+    const saved = localStorage.getItem("RACUN_MYINFO");
+    return saved ? JSON.parse(saved) : { name: "", address: "", email: "", phone: "" };
+  });
+
+  // Export mode: "interno" | "stranka"
+  const [exportMode, setExportMode] = useState(() => {
+    const saved = localStorage.getItem("RACUN_EXPORTMODE");
+    return saved || "interno";
+  });
+
+  // Package history
   const [packages, setPackages] = useState(() => {
     const saved = localStorage.getItem("RACUN_PACKAGES");
     return saved ? JSON.parse(saved) : [];
@@ -39,40 +61,48 @@ export default function App() {
   const [pkgName, setPkgName] = useState("");
   const [showHistory, setShowHistory] = useState(false);
 
+  // Persist draft
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_ITEMS", JSON.stringify(items)); }, [items]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_PEOPLE", JSON.stringify(people)); }, [people]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_ORIGRATIO", String(origRatio)); }, [origRatio]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_MYRATIO", String(myRatio)); }, [myRatio]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_SHIPCNY", String(shippingCNY)); }, [shippingCNY]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_RECEIVED", JSON.stringify(receivedMap)); }, [receivedMap]);
+  useEffect(() => { localStorage.setItem("RACUN_MYINFO", JSON.stringify(myInfo)); }, [myInfo]);
+  useEffect(() => { localStorage.setItem("RACUN_EXPORTMODE", exportMode); }, [exportMode]);
 
-  const totalWeight = useMemo(() => sum(items.map((r) => num(r.weight))), [items]);
-  const totalCNY = useMemo(() => sum(items.map((r) => num(r.cny))), [items]);
-  const shippingEUR = useMemo(() => (shippingCNY ? shippingCNY / safe(myRatio) : 0), [shippingCNY, myRatio]);
+  // ==== Derived numbers (Excel parity) ====
+  const totalWeight = useMemo(() => sum(items.map((r) => num(r.weight))), [items]); // B39
+  const totalCNY = useMemo(() => sum(items.map((r) => num(r.cny))), [items]); // B33
+  const shippingEUR = useMemo(() => (shippingCNY ? shippingCNY / safe(myRatio) : 0), [shippingCNY, myRatio]); // B42
 
+  // USD/EUR surrogate => G35 = B35/E35
   const usdPerEur = useMemo(() => safe(origRatio) / safe(myRatio), [origRatio, myRatio]);
 
+  // Profit due to rate difference (B37): SUM(CNY/E35) – SUM(CNY/B35)
   const rateProfit = useMemo(() => {
     const eurAll = totalCNY / safe(myRatio);
     const usdAll = totalCNY / safe(origRatio);
     return eurAll - usdAll;
   }, [totalCNY, myRatio, origRatio]);
 
+  // Line computations
   const computedRows = useMemo(() => {
     const wTotal = totalWeight || 1;
     return items.map((r) => {
       const cny = num(r.cny);
       const weight = num(r.weight);
-      const eur = cny / safe(myRatio);
-      const shipPart = (weight / wTotal) * shippingEUR;
-      const together = eur + shipPart;
-      const regular = together / safe(usdPerEur);
-      const profit = together - regular;
-      const weightPct = wTotal ? (weight / wTotal) * 100 : 0;
+      const eur = cny / safe(myRatio); // C = B/E35
+      const shipPart = (weight / wTotal) * shippingEUR; // D = (E/B39)*B42
+      const together = eur + shipPart; // G
+      const regular = together / safe(usdPerEur); // I = G / G35
+      const profit = together - regular; // J = G - I
+      const weightPct = wTotal ? (weight / wTotal) * 100 : 0; // F
       return { ...r, eur, shipPart, together, regular, profit, weightPct };
     });
   }, [items, myRatio, shippingEUR, totalWeight, usdPerEur]);
 
+  // Summary per person
   const summaryByPerson = useMemo(() => {
     const map = new Map();
     for (const p of people) map.set(p, 0);
@@ -81,18 +111,18 @@ export default function App() {
       if (!key) continue;
       map.set(key, safe(map.get(key)) + row.together);
     }
-    const arr = people.map((p) => {
+    return people.map((p) => {
       const eur = safe(map.get(p));
       const minimum = eur / safe(usdPerEur);
       const received = num(receivedMap[p]);
       const due = eur - received;
       return { who: p, eur, minimum, received, due };
     });
-    return arr;
   }, [people, computedRows, usdPerEur, receivedMap]);
 
   const grandTogether = useMemo(() => sum(computedRows.map((r) => r.together)), [computedRows]);
 
+  // === UI helpers ===
   const addRow = () => setItems((s) => [...s, { id: uid(), artikel: "", cny: "", weight: "", who: people[0] || "" }]);
   const delRow = (id) => setItems((s) => s.filter((r) => r.id !== id));
   const updateRow = (id, k, v) => setItems((s) => s.map((r) => (r.id === id ? { ...r, [k]: v } : r)));
@@ -105,17 +135,33 @@ export default function App() {
     setReceivedMap((m) => { const n = { ...m }; delete n[name]; return n; });
   };
 
+  // === Save current package to history ===
   const savePackage = () => {
     const name = pkgName?.trim() || `Paket ${new Date().toLocaleString()}`;
     const payload = {
-      id: uid(), name, createdAt: new Date().toISOString(),
-      items, people, origRatio, myRatio, shippingCNY,
-      derived: { totalWeight, totalCNY, shippingEUR, usdPerEur, rateProfit, grandTogether, summaryByPerson },
+      id: uid(),
+      name,
+      createdAt: new Date().toISOString(),
+      items,
+      people,
+      origRatio,
+      myRatio,
+      shippingCNY,
+      derived: {
+        totalWeight,
+        totalCNY,
+        shippingEUR,
+        usdPerEur,
+        rateProfit,
+        grandTogether,
+        summaryByPerson,
+      },
     };
     const next = [payload, ...packages];
     setPackages(next);
     localStorage.setItem("RACUN_PACKAGES", JSON.stringify(next));
     setPkgName("");
+    setShowHistory(true); // <-- prikažemo zgodovino takoj
   };
 
   const deletePackage = (id) => {
@@ -124,6 +170,7 @@ export default function App() {
     localStorage.setItem("RACUN_PACKAGES", JSON.stringify(next));
   };
 
+  // === PDF export ===
   const [exportSelection, setExportSelection] = useState({ all: true, who: [] });
   const printRef = useRef(null);
 
@@ -134,124 +181,199 @@ export default function App() {
     const selectedWho = exportSelection.all ? people.filter(Boolean) : exportSelection.who;
     if (!selectedWho.length) return alert("Izberi vsaj eno osebo ali ALL");
 
-    const printable = document.createElement("div");
-    printable.style.padding = "24px";
-    printable.style.width = "794px";
-    printable.style.background = "white";
-    printable.style.color = "black";
+    // Helper to render one block (section) as canvas and add to PDF (with slicing for multipage)
+    async function addPrintableToPdf(pdf, node) {
+      document.body.appendChild(node);
+      const canvas = await html2canvas(node, { scale: 2 });
+      document.body.removeChild(node);
 
-    const header = document.createElement("div");
-    header.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-      <div>
-        <div style="font-size:20px;font-weight:700;">Račun / Povzetek</div>
-        <div style="font-size:12px;opacity:0.8;">Ustvarjeno: ${new Date().toLocaleString()}</div>
-      </div>
-      <div style="text-align:right;font-size:12px;">
-        <div><b>Tečaji:</b> Orig(B35)=${fmt(origRatio)} | Moj(E35)=${fmt(myRatio)} | USD/EUR(G35)=${fmt(usdPerEur)}</div>
-        <div><b>Poštnina:</b> ${fmt(shippingCNY)} CNY = ${fmt(shippingEUR)} EUR</div>
-      </div>
-    </div>`;
-    printable.appendChild(header);
+      const imgData = canvas.toDataURL("image/png");
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = pageWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-    for (const who of selectedWho) {
-      const rows = computedRows.filter((r) => r.who?.trim() === who);
-      const subTotal = rows.reduce((a, r) => a + r.together, 0);
-      const received = num(receivedMap[who]);
-      const due = subTotal - received;
-
-      const section = document.createElement("div");
-      section.style.marginBottom = "24px";
-      section.innerHTML = `
-        <div style="font-weight:700;font-size:16px;margin:8px 0 4px;">${esc(who)}</div>
-        <table style="width:100%;border-collapse:collapse;font-size:12px;">
-          <thead>
-            <tr>
-              <th style="border-bottom:1px solid #ddd;text-align:left;padding:6px;">Artikel</th>
-              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">CNY</th>
-              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">EUR</th>
-              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Teža (g)</th>
-              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Poštnina EUR</th>
-              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Skupaj EUR</th>
-              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Redna</th>
-              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Profit</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map((r) => `
-                <tr>
-                  <td style="border-bottom:1px solid #f0f0f0;padding:6px;">${esc(r.artikel)}</td>
-                  <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.cny)}</td>
-                  <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.eur)}</td>
-                  <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.weight)}</td>
-                  <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.shipPart)}</td>
-                  <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.together)}</td>
-                  <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.regular)}</td>
-                  <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.profit)}</td>
-                </tr>`).join("")}
-          </tbody>
-        </table>
-        <div style="display:flex;justify-content:flex-end;gap:16px;margin-top:8px;font-size:12px;">
-          <div><b>Prejeto:</b> ${fmt(received)} EUR</div>
-          <div><b>Skupaj:</b> ${fmt(subTotal)} EUR</div>
-          <div><b>Dolg:</b> ${fmt(due)} EUR</div>
-        </div>
-      `;
-      printable.appendChild(section);
-    }
-
-    const footer = document.createElement("div");
-    footer.style.fontSize = "12px";
-    footer.style.marginTop = "8px";
-    footer.innerHTML = `
-      <div style="display:flex;justify-content:space-between;border-top:1px solid #eee;padding-top:8px;">
-        <div>
-          <div><b>Skupna teža:</b> ${fmt(totalWeight)} g</div>
-          <div><b>Skupaj CNY:</b> ${fmt(totalCNY)}</div>
-        </div>
-        <div style="text-align:right;">
-          <div><b>Skupaj EUR (artikli+poštnina):</b> ${fmt(grandTogether)} EUR</div>
-          <div><b>"Zaslužek" (tečajna razlika):</b> ${fmt(rateProfit)}</div>
-        </div>
-      </div>`;
-    printable.appendChild(footer);
-
-    document.body.appendChild(printable);
-    const canvas = await html2canvas(printable, { scale: 2 });
-    document.body.removeChild(printable);
-
-    const imgData = canvas.toDataURL("image/png");
-    const pdf = new jsPDF({ orientation: "p", unit: "pt", format: "a4" });
-
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgWidth = pageWidth;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-    let y = 0;
-    if (imgHeight <= pageHeight) {
-      pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
-    } else {
-      let remainingHeight = imgHeight;
-      const pageCanvas = document.createElement("canvas");
-      const pageCtx = pageCanvas.getContext("2d");
-      const pxPageHeight = Math.floor((canvas.width * pageHeight) / pageWidth);
-      pageCanvas.width = canvas.width;
-      pageCanvas.height = pxPageHeight;
-
-      let sY = 0;
-      while (remainingHeight > 0) {
-        pageCtx.clearRect(0, 0, pageCanvas.width, pageCanvas.height);
-        pageCtx.drawImage(canvas, 0, sY, canvas.width, pxPageHeight, 0, 0, pageCanvas.width, pageCanvas.height);
-        const pageData = pageCanvas.toDataURL("image/png");
-        if (y > 0) pdf.addPage();
-        pdf.addImage(pageData, "PNG", 0, 0, pageWidth, pageHeight);
-        remainingHeight -= pageHeight;
-        sY += pxPageHeight;
-        y += pageHeight;
+      if (imgHeight <= pageHeight) {
+        pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
+      } else {
+        let remainingHeight = imgHeight;
+        const pageCanvas = document.createElement("canvas");
+        const pageCtx = pageCanvas.getContext("2d");
+        const pxPageHeight = Math.floor((canvas.width * pageHeight) / pageWidth);
+        pageCanvas.width = canvas.width;
+        pageCanvas.height = pxPageHeight;
+        let sY = 0;
+        while (remainingHeight > 0) {
+          pageCtx.clearRect(0, 0, pageCanvas.width, pageCanvas.height);
+          pageCtx.drawImage(canvas, 0, sY, canvas.width, pxPageHeight, 0, 0, pageCanvas.width, pageCanvas.height);
+          const pageData = pageCanvas.toDataURL("image/png");
+          if (pdf.getNumberOfPages() > 0) pdf.addPage();
+          pdf.addImage(pageData, "PNG", 0, 0, pageWidth, pageHeight);
+          remainingHeight -= pageHeight;
+          sY += pxPageHeight;
+        }
       }
     }
 
-    pdf.save(`racun_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.pdf`);
+    const pdf = new jsPDF({ orientation: "p", unit: "pt", format: "a4" });
+
+    if (exportMode === "interno") {
+      // Build one printable block with ALL selected people (internal detailed view)
+      const printable = document.createElement("div");
+      printable.style.padding = "24px";
+      printable.style.width = "794px"; // A4 width at ~96dpi
+      printable.style.background = "white";
+      printable.style.color = "black";
+
+      const header = document.createElement("div");
+      header.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <div style="font-size:20px;font-weight:700;">Povzetek (interno)</div>
+          <div style="font-size:12px;opacity:0.8;">Ustvarjeno: ${new Date().toLocaleString()}</div>
+        </div>
+        <div style="text-align:right;font-size:12px;">
+          <div><b>Tečaji:</b> Orig(B35)=${fmt(origRatio)} | Moj(E35)=${fmt(myRatio)} | USD/EUR(G35)=${fmt(usdPerEur)}</div>
+          <div><b>Poštnina:</b> ${fmt(shippingCNY)} CNY = ${fmt(shippingEUR)} EUR</div>
+        </div>
+      </div>`;
+      printable.appendChild(header);
+
+      for (const who of selectedWho) {
+        const rows = computedRows.filter((r) => r.who?.trim() === who);
+        const subTotal = rows.reduce((a, r) => a + r.together, 0);
+        const received = num(receivedMap[who]);
+        const due = subTotal - received;
+
+        const section = document.createElement("div");
+        section.style.marginBottom = "24px";
+        section.innerHTML = `
+          <div style="font-weight:700;font-size:16px;margin:8px 0 4px;">${esc(who)}</div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr>
+                <th style="border-bottom:1px solid #ddd;text-align:left;padding:6px;">Artikel</th>
+                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">CNY</th>
+                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">EUR</th>
+                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Teža (g)</th>
+                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Poštnina EUR</th>
+                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Skupaj EUR</th>
+                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Redna</th>
+                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Profit</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((r) => `
+                <tr>
+                  <td style=\"border-bottom:1px solid #f0f0f0;padding:6px;\">${esc(r.artikel)}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.cny)}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.eur)}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.weight)}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.shipPart)}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.together)}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.regular)}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.profit)}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+          <div style="display:flex;justify-content:flex-end;gap:16px;margin-top:8px;font-size:12px;">
+            <div><b>Prejeto:</b> ${fmt(received)} EUR</div>
+            <div><b>Skupaj:</b> ${fmt(subTotal)} EUR</div>
+            <div><b>Dolg:</b> ${fmt(due)} EUR</div>
+          </div>
+        `;
+        printable.appendChild(section);
+      }
+
+      const footer = document.createElement("div");
+      footer.style.fontSize = "12px";
+      footer.style.marginTop = "8px";
+      footer.innerHTML = `
+        <div style="display:flex;justify-content:space-between;border-top:1px solid #eee;padding-top:8px;">
+          <div>
+            <div><b>Skupna teža:</b> ${fmt(totalWeight)} g</div>
+            <div><b>Skupaj CNY:</b> ${fmt(totalCNY)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div><b>Skupaj EUR (artikli+poštnina):</b> ${fmt(grandTogether)} EUR</div>
+            <div><b>"Zaslužek" (tečajna razlika):</b> ${fmt(rateProfit)}</div>
+          </div>
+        </div>`;
+      printable.appendChild(footer);
+
+      await addPrintableToPdf(pdf, printable);
+    } else {
+      // ========== CLIENT PDF (Za stranko) ==========
+      // One page per selected person; clean invoice-like layout without profit/tečaji
+      let first = true;
+      for (const who of selectedWho) {
+        const rows = computedRows.filter((r) => r.who?.trim() === who);
+        const subTotal = rows.reduce((a, r) => a + r.together, 0);
+
+        const section = document.createElement("div");
+        section.style.padding = "24px";
+        section.style.width = "794px";
+        section.style.background = "white";
+        section.style.color = "black";
+
+        section.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
+            <div>
+              <div style="font-size:18px;font-weight:700;">${esc(myInfo.name || "")}</div>
+              <div style="font-size:12px;white-space:pre-line;">${esc(myInfo.address || "")}</div>
+              <div style="font-size:12px;">${esc(myInfo.email || "")}${myInfo.phone ? " • " + esc(myInfo.phone) : ""}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:18px;font-weight:700;">Račun</div>
+              <div style="font-size:12px;opacity:0.8;">Datum: ${new Date().toLocaleDateString()}</div>
+              <div style="font-size:12px;opacity:0.8;">Kupec: ${esc(who)}</div>
+            </div>
+          </div>
+
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr>
+                <th style="border-bottom:1px solid #000;text-align:left;padding:6px;">Naziv</th>
+                <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Količina</th>
+                <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Cena (EUR)</th>
+                <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Vrednost (EUR)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((r) => `
+                <tr>
+                  <td style=\"border-bottom:1px solid #e5e5e5;padding:6px;\">${esc(r.artikel || "Artikel")}</td>
+                  <td style=\"border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;\">1,00</td>
+                  <td style=\"border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;\">${fmt(r.together)}</td>
+                  <td style=\"border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;\">${fmt(r.together)}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+
+          <div style="display:flex;justify-content:flex-end;margin-top:8px;">
+            <table style="font-size:12px;min-width:260px;border-collapse:collapse;">
+              <tbody>
+                <tr>
+                  <td style="padding:6px;border-top:1px solid #000;">Skupaj</td>
+                  <td style="padding:6px;border-top:1px solid #000;text-align:right;">${fmt(subTotal)} EUR</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px;font-weight:700;border-top:1px solid #000;">Za plačilo</td>
+                  <td style="padding:6px;font-weight:700;border-top:1px solid #000;text-align:right;">${fmt(subTotal)} EUR</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div style="margin-top:8px;font-size:11px;color:#555;">Opomba: v ceno je vključena proporcionalna poštnina.</div>
+        `;
+
+        if (!first) pdf.addPage();
+        await addPrintableToPdf(pdf, section);
+        first = false;
+      }
+    }
+
+    pdf.save(`izvoz_${exportMode}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.pdf`);
   };
 
   return (
@@ -268,6 +390,7 @@ export default function App() {
           </div>
         </header>
 
+        {/* Settings */}
         <section className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="rounded-2xl bg-white p-4 shadow">
             <div className="flex items-center gap-2 font-semibold mb-2"><Settings className="h-4 w-4"/>Tečaji</div>
@@ -294,6 +417,32 @@ export default function App() {
           </div>
         </section>
 
+        {/* My details for client invoice */}
+        <section className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="rounded-2xl bg-white p-4 shadow md:col-span-3">
+            <div className="flex items-center gap-2 font-semibold mb-2"><UserCircle2 className="h-4 w-4"/>Moji podatki (glava računa – za stranko)</div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <label className="text-sm">
+                <span className="text-neutral-700">Ime/Podjetje</span>
+                <input className="mt-1 w-full rounded-xl border px-3 py-2" value={myInfo.name} onChange={(e)=> setMyInfo((x)=> ({...x, name: e.target.value}))} placeholder="npr. Jakob R."/>
+              </label>
+              <label className="text-sm md:col-span-2">
+                <span className="text-neutral-700">Naslov</span>
+                <input className="mt-1 w-full rounded-xl border px-3 py-2" value={myInfo.address} onChange={(e)=> setMyInfo((x)=> ({...x, address: e.target.value}))} placeholder="Ulica 1, 1000 Ljubljana"/>
+              </label>
+              <label className="text-sm">
+                <span className="text-neutral-700">Telefon</span>
+                <input className="mt-1 w-full rounded-xl border px-3 py-2" value={myInfo.phone} onChange={(e)=> setMyInfo((x)=> ({...x, phone: e.target.value}))} placeholder="070 123 456"/>
+              </label>
+              <label className="text-sm md:col-span-4">
+                <span className="text-neutral-700">E-pošta</span>
+                <input className="mt-1 w-full rounded-xl border px-3 py-2" value={myInfo.email} onChange={(e)=> setMyInfo((x)=> ({...x, email: e.target.value}))} placeholder="ime@domena.si"/>
+              </label>
+            </div>
+          </div>
+        </section>
+
+        {/* Items table */}
         <section className="mt-6 rounded-2xl bg-white shadow overflow-hidden">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -354,6 +503,7 @@ export default function App() {
           </div>
         </section>
 
+        {/* Summary per person */}
         <section className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="rounded-2xl bg-white p-4 shadow">
             <div className="flex items-center justify-between mb-2">
@@ -388,16 +538,28 @@ export default function App() {
             </div>
           </div>
 
+          {/* Export + Save */}
           <div className="rounded-2xl bg-white p-4 shadow">
             <div className="font-semibold mb-2 flex items-center gap-2"><FileDown className="h-4 w-4"/>Export & Shrani</div>
             <div className="space-y-3">
               <div className="rounded-xl border p-3">
-                <div className="text-sm font-medium mb-2">PDF Export</div>
-                <div className="flex items-center gap-4 mb-2">
+                <div className="text-sm font-medium mb-2 flex items-center gap-2"><FileText className="h-4 w-4"/>PDF Export</div>
+                <div className="flex flex-wrap items-center gap-4 mb-2">
                   <label className="flex items-center gap-2">
                     <input type="checkbox" checked={exportSelection.all} onChange={(e)=> setExportSelection((s)=> ({...s, all: e.target.checked}))}/>
                     <span>Vsi</span>
                   </label>
+                  <div className="flex items-center gap-3 text-sm">
+                    <span className="text-neutral-700">Način:</span>
+                    <label className="inline-flex items-center gap-2">
+                      <input type="radio" name="mode" checked={exportMode === "interno"} onChange={()=> setExportMode("interno")} />
+                      <span>Interno</span>
+                    </label>
+                    <label className="inline-flex items-center gap-2">
+                      <input type="radio" name="mode" checked={exportMode === "stranka"} onChange={()=> setExportMode("stranka")} />
+                      <span>Za stranko</span>
+                    </label>
+                  </div>
                 </div>
                 {!exportSelection.all && (
                   <div className="flex flex-wrap gap-2 mb-2">
@@ -423,21 +585,67 @@ export default function App() {
           </div>
         </section>
 
+        {/* History Drawer */}
+        {showHistory && (
+          <section className="fixed inset-0 bg-black/40 flex justify-end z-50" onClick={()=> setShowHistory(false)}>
+            <div className="w-full max-w-2xl bg-white h-full p-4 overflow-y-auto" onClick={(e)=> e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="font-semibold flex items-center gap-2"><History className="h-4 w-4"/>Shranjeni paketi</div>
+                <button className="rounded-xl border px-3 py-1" onClick={()=> setShowHistory(false)}>Zapri</button>
+              </div>
+              <div className="space-y-3">
+                {packages.length === 0 && <div className="text-sm text-neutral-600">Ni shranjenih paketov.</div>}
+                {packages.map((p) => (
+                  <div key={p.id} className="rounded-xl border p-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-medium">{p.name}</div>
+                        <div className="text-xs text-neutral-600">{new Date(p.createdAt).toLocaleString()}</div>
+                      </div>
+                      <button className="p-2 text-red-600 hover:bg-red-50 rounded-xl" onClick={()=> deletePackage(p.id)}><Trash2 className="h-4 w-4"/></button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-sm mt-2">
+                      <div><b>Skupaj EUR:</b> {fmt(p.derived.grandTogether)}</div>
+                      <div><b>Skupna teža:</b> {fmt(p.derived.totalWeight)} g</div>
+                      <div><b>Poštnina EUR:</b> {fmt(p.derived.shippingEUR)}</div>
+                      <div><b>Zaslužek (teč.):</b> {fmt(p.derived.rateProfit)}</div>
+                    </div>
+                    <div className="mt-2">
+                      <div className="text-xs text-neutral-600 mb-1">Po osebah (skupaj EUR):</div>
+                      <div className="flex flex-wrap gap-2">
+                        {p.derived.summaryByPerson.map((row) => (
+                          <span key={row.who} className="rounded-full border px-2 py-1 text-xs">{row.who}: {fmt(row.eur)}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
         <footer className="mt-10 text-center text-xs text-neutral-500">
-          Zgrajeno za Jakoba • Excel-parity izračuni • Lokalno shranjevanje • PDF export (ALL ali po osebah)
+          Zgrajeno za Jakoba • Excel-parity izračuni • Lokalno shranjevanje • PDF export (ALL / osebe) • Interno & Za stranko
         </footer>
       </div>
 
+      {/* Hidden ref for potential future print areas */}
       <div ref={printRef} className="hidden"/>
     </div>
   );
 }
 
+// ===== Small UI helpers =====
 function Th({ children, className = "" }) {
-  return (<th className={`px-3 py-2 text-left text-xs font-semibold ${className}`}>{children}</th>);
+  return (
+    <th className={`px-3 py-2 text-left text-xs font-semibold ${className}`}>{children}</th>
+  );
 }
 function Td({ children, className = "" }) {
-  return (<td className={`px-3 py-2 align-top ${className}`}>{children}</td>);
+  return (
+    <td className={`px-3 py-2 align-top ${className}`}>{children}</td>
+  );
 }
 function LabelInput({ label, value, onChange }) {
   return (
@@ -448,11 +656,10 @@ function LabelInput({ label, value, onChange }) {
   );
 }
 
+// ===== Utils =====
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function safe(v) { const n = Number(v); return !n || !Number.isFinite(n) ? 1 : n; }
 function sum(arr) { return arr.reduce((a,b)=> a + (Number.isFinite(b)? b : 0), 0); }
 function fmt(n) { return (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }); }
 function uid() { return Math.random().toString(36).slice(2, 10); }
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c)=> ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
-
-export { }
