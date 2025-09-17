@@ -1,26 +1,25 @@
 import React, { useMemo, useRef, useState, useEffect } from "react";
-import { Download, Plus, Trash2, Save, History, FileDown, Users, Settings, PackageSearch, UserCircle2, FileText, Eye } from "lucide-react";
+import { Download, Plus, Trash2, Save, History, FileDown, Users, Settings, PackageSearch, Eye, FileText } from "lucide-react";
 import { useUser } from "@clerk/clerk-react";
 
-// RealApp.jsx – z oblačno sinhronizacijo prek Clerk (unsafeMetadata)
-// NOVO v tej verziji:
-// • "Pregled" shranjenega paketa (celoten pogled) + "Naloži v osnutek"
-// • Potrditev pred izbrisom paketa
-// • Avtomatsko številčenje računov (prefix + števec), vključeno v PDF "Za stranko"
-// • Export načina: "interno" (vse) in "stranka" (čist račun)
-// • Shranjevanje paketov lokalno + v Clerk za sinhronizacijo med napravami
-// • "Moji podatki" (glava računa) se sinhronizirajo v Clerk
+// RealApp.jsx – Cloud sync prek Clerk (unsafeMetadata)
+// NOVO:
+// • Popravljen +1 € bug v povzetku
+// • Dodana kolona "Količina" (qty) – vpliva na težo, CNY in EUR
+// • Poenostavljen "Račun za stranko" header (brez osebnih podatkov)
+// • Odstranjena sekcija z ročnim vnosom osebnih podatkov
 
 export default function RealApp() {
-  // Clerk – stanje uporabnika
   const { isLoaded, isSignedIn, user } = useUser();
 
   // ==== Core state ====
   const [items, setItems] = useState(() => {
     const saved = localStorage.getItem("RACUN_DRAFT_ITEMS");
-    return saved ? JSON.parse(saved) : [
-      { id: uid(), artikel: "", cny: "", weight: "", who: "" },
-    ];
+    return saved
+      ? JSON.parse(saved)
+      : [
+          { id: uid(), artikel: "", cny: "", weight: "", qty: 1, who: "" },
+        ];
   });
 
   const [people, setPeople] = useState(() => {
@@ -31,15 +30,15 @@ export default function RealApp() {
   // Exchange rates & shipping
   const [origRatio, setOrigRatio] = useState(() => {
     const saved = localStorage.getItem("RACUN_DRAFT_ORIGRATIO");
-    return saved ? Number(saved) : Number((800 / 101.37).toFixed(6)); // primer iz Excela B35
+    return saved ? Number(saved) : Number((800 / 101.37).toFixed(6));
   });
   const [myRatio, setMyRatio] = useState(() => {
     const saved = localStorage.getItem("RACUN_DRAFT_MYRATIO");
-    return saved ? Number(saved) : 6.5; // E35
+    return saved ? Number(saved) : 6.5;
   });
   const [shippingCNY, setShippingCNY] = useState(() => {
     const saved = localStorage.getItem("RACUN_DRAFT_SHIPCNY");
-    return saved ? Number(saved) : 256.2; // B41
+    return saved ? Number(saved) : 256.2;
   });
 
   // Received amounts per person (prejeto)
@@ -48,22 +47,13 @@ export default function RealApp() {
     return saved ? JSON.parse(saved) : {};
   });
 
-  // Moji podatki za račun (glava na PDF za stranko)
-  const [myInfo, setMyInfo] = useState(() => {
-    const saved = localStorage.getItem("RACUN_MYINFO");
-    return saved ? JSON.parse(saved) : { name: "", address: "", email: "", phone: "" };
-  });
-
-  // Avtomatsko številčenje računov
-  const defaultPrefix = `${(myInfo?.name || "RAC").toString().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0,3)}-${new Date().getFullYear()}-`;
+  // Avtomatsko številčenje računov (brez osebnih podatkov)
+  const defaultPrefix = `RAC-${new Date().getFullYear()}-`;
   const [invPrefix, setInvPrefix] = useState(() => localStorage.getItem("RACUN_INV_PREFIX") || defaultPrefix);
   const [invCounter, setInvCounter] = useState(() => Number(localStorage.getItem("RACUN_INV_COUNTER")) || 1);
 
   // Export mode: "interno" | "stranka"
-  const [exportMode, setExportMode] = useState(() => {
-    const saved = localStorage.getItem("RACUN_EXPORTMODE");
-    return saved || "interno";
-  });
+  const [exportMode, setExportMode] = useState(() => localStorage.getItem("RACUN_EXPORTMODE") || "interno");
 
   // Package history
   const [packages, setPackages] = useState(() => {
@@ -72,18 +62,15 @@ export default function RealApp() {
   });
   const [pkgName, setPkgName] = useState("");
   const [showHistory, setShowHistory] = useState(false);
-
-  // Pregled shranjenega paketa
   const [previewPkg, setPreviewPkg] = useState(null);
 
-  // Persist draft -> localStorage
+  // Persist draft
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_ITEMS", JSON.stringify(items)); }, [items]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_PEOPLE", JSON.stringify(people)); }, [people]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_ORIGRATIO", String(origRatio)); }, [origRatio]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_MYRATIO", String(myRatio)); }, [myRatio]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_SHIPCNY", String(shippingCNY)); }, [shippingCNY]);
   useEffect(() => { localStorage.setItem("RACUN_DRAFT_RECEIVED", JSON.stringify(receivedMap)); }, [receivedMap]);
-  useEffect(() => { localStorage.setItem("RACUN_MYINFO", JSON.stringify(myInfo)); }, [myInfo]);
   useEffect(() => { localStorage.setItem("RACUN_EXPORTMODE", exportMode); }, [exportMode]);
   useEffect(() => { localStorage.setItem("RACUN_INV_PREFIX", invPrefix); }, [invPrefix]);
   useEffect(() => { localStorage.setItem("RACUN_INV_COUNTER", String(invCounter)); }, [invCounter]);
@@ -93,27 +80,12 @@ export default function RealApp() {
     if (!isLoaded || !isSignedIn) return;
     const cloudPkgs = user?.unsafeMetadata?.packages;
     if (Array.isArray(cloudPkgs)) setPackages(cloudPkgs);
-
-    const cloudInfo = user?.unsafeMetadata?.myInfo;
-    if (cloudInfo && typeof cloudInfo === "object") setMyInfo(cloudInfo);
-
     const invCloud = user?.unsafeMetadata?.invoice;
     if (invCloud && typeof invCloud === "object") {
       if (typeof invCloud.prefix === "string") setInvPrefix(invCloud.prefix);
       if (Number.isFinite(invCloud.counter)) setInvCounter(Number(invCloud.counter));
     }
   }, [isLoaded, isSignedIn, user]);
-
-  // === Cloud autosave za "Moji podatki" (debounce) ===
-  useEffect(() => {
-    if (!isSignedIn) return;
-    const t = setTimeout(() => {
-      user.update({
-        unsafeMetadata: { ...(user.unsafeMetadata || {}), myInfo },
-      }).catch(() => {});
-    }, 400);
-    return () => clearTimeout(t);
-  }, [isSignedIn, user, myInfo]);
 
   // === Cloud autosave za invoice settings (debounce) ===
   useEffect(() => {
@@ -127,60 +99,88 @@ export default function RealApp() {
   }, [isSignedIn, user, invPrefix, invCounter]);
 
   // ==== Derived numbers (Excel parity) ====
-  const totalWeight = useMemo(() => sum(items.map((r) => num(r.weight))), [items]); // B39
-  const totalCNY = useMemo(() => sum(items.map((r) => num(r.cny))), [items]); // B33
-  const shippingEUR = useMemo(() => (shippingCNY ? shippingCNY / safe(myRatio) : 0), [shippingCNY, myRatio]); // B42
-
-  // USD/EUR surrogate => G35 = B35/E35
+  const totalWeight = useMemo(
+    () => sum(items.map((r) => num(r.weight) * (num(r.qty) || 1))),
+    [items]
+  );
+  const totalCNY = useMemo(
+    () => sum(items.map((r) => num(r.cny) * (num(r.qty) || 1))),
+    [items]
+  );
+  const shippingEUR = useMemo(() => (shippingCNY ? shippingCNY / safe(myRatio) : 0), [shippingCNY, myRatio]);
   const usdPerEur = useMemo(() => safe(origRatio) / safe(myRatio), [origRatio, myRatio]);
-
-  // Profit due to rate difference (B37): SUM(CNY/E35) – SUM(CNY/B35)
   const rateProfit = useMemo(() => {
     const eurAll = totalCNY / safe(myRatio);
     const usdAll = totalCNY / safe(origRatio);
     return eurAll - usdAll;
   }, [totalCNY, myRatio, origRatio]);
 
-  // Line computations
-  const computedRows = useMemo(() => computeRows({ items, myRatio, shippingCNY, origRatio }), [items, myRatio, shippingCNY, origRatio]);
+  // Line computations (upošteva qty)
+  const computedRows = useMemo(
+    () => computeRows({ items, myRatio, shippingCNY, origRatio }),
+    [items, myRatio, shippingCNY, origRatio]
+  );
 
-  // Summary per person
-  // Povzetek po osebi – brez +1€, ker ne uporabljamo safe() za seštevanje
-const summaryByPerson = useMemo(() => {
-  return people.map((p) => {
-    const rows = computedRows.filter((r) => (r.who?.trim() || "") === p);
+  // Povzetek po osebi (brez +1 €)
+  const summaryByPerson = useMemo(() => {
+    return people.map((p) => {
+      const rows = computedRows.filter((r) => (r.who?.trim() || "") === p);
+      const eur = rows.reduce((a, r) => a + num(r.together), 0);
+      const minimum = eur / safe(usdPerEur);
+      const received = num(receivedMap[p]);
+      const due = eur - received;
+      return { who: p, eur, minimum, received, due };
+    });
+  }, [people, computedRows, usdPerEur, receivedMap]);
 
-    const eur = rows.reduce((a, r) => a + num(r.together), 0); // num, ne safe
-    const minimum = eur / safe(usdPerEur);                     // tu safe ostane (deljenje)
-    const received = num(receivedMap[p]);
-    const due = eur - received;
-
-    return { who: p, eur, minimum, received, due };
-  });
-}, [people, computedRows, usdPerEur, receivedMap]);
-
-  const grandTogether = useMemo(() => sum(computedRows.map((r) => r.together)), [computedRows]);
+  const grandTogether = useMemo(
+    () => sum(computedRows.map((r) => r.together)),
+    [computedRows]
+  );
 
   // === UI helpers ===
-  const addRow = () => setItems((s) => [...s, { id: uid(), artikel: "", cny: "", weight: "", who: people[0] || "" }]);
+  const addRow = () =>
+    setItems((s) => [
+      ...s,
+      { id: uid(), artikel: "", cny: "", weight: "", qty: 1, who: people[0] || "" },
+    ]);
   const delRow = (id) => setItems((s) => s.filter((r) => r.id !== id));
-  const updateRow = (id, k, v) => setItems((s) => s.map((r) => (r.id === id ? { ...r, [k]: v } : r)));
+  const updateRow = (id, k, v) =>
+    setItems((s) => s.map((r) => (r.id === id ? { ...r, [k]: v } : r)));
 
   const addPerson = () => setPeople((s) => [...s, ""]);
   const delPerson = (idx) => {
     const name = people[idx];
     setPeople((s) => s.filter((_, i) => i !== idx));
     setItems((s) => s.map((r) => (r.who === name ? { ...r, who: "" } : r)));
-    setReceivedMap((m) => { const n = { ...m }; delete n[name]; return n; });
+    setReceivedMap((m) => {
+      const n = { ...m };
+      delete n[name];
+      return n;
+    });
   };
 
   // === Save current package to history (local + cloud) ===
   const savePackage = async () => {
     const name = pkgName?.trim() || `Paket ${new Date().toLocaleString()}`;
     const payload = {
-      id: uid(), name, createdAt: new Date().toISOString(),
-      items, people, origRatio, myRatio, shippingCNY,
-      derived: { totalWeight, totalCNY, shippingEUR, usdPerEur, rateProfit, grandTogether, summaryByPerson },
+      id: uid(),
+      name,
+      createdAt: new Date().toISOString(),
+      items,
+      people,
+      origRatio,
+      myRatio,
+      shippingCNY,
+      derived: {
+        totalWeight,
+        totalCNY,
+        shippingEUR,
+        usdPerEur,
+        rateProfit,
+        grandTogether,
+        summaryByPerson,
+      },
     };
     const next = [payload, ...packages];
     setPackages(next);
@@ -193,7 +193,7 @@ const summaryByPerson = useMemo(() => {
         await user.update({
           unsafeMetadata: { ...(user.unsafeMetadata || {}), packages: next },
         });
-      } catch (e) { /* noop */ }
+      } catch (e) {}
     }
   };
 
@@ -207,7 +207,7 @@ const summaryByPerson = useMemo(() => {
         await user.update({
           unsafeMetadata: { ...(user.unsafeMetadata || {}), packages: next },
         });
-      } catch (e) { /* noop */ }
+      } catch (e) {}
     }
   };
 
@@ -230,7 +230,9 @@ const summaryByPerson = useMemo(() => {
     const { jsPDF } = await import("jspdf");
     const html2canvas = (await import("html2canvas")).default;
 
-    const selectedWho = exportSelection.all ? people.filter(Boolean) : exportSelection.who;
+    const selectedWho = exportSelection.all
+      ? people.filter(Boolean)
+      : exportSelection.who;
     if (!selectedWho.length) return alert("Izberi vsaj eno osebo ali ALL");
 
     async function addPrintableToPdf(pdf, node) {
@@ -256,7 +258,17 @@ const summaryByPerson = useMemo(() => {
         let sY = 0;
         while (remainingHeight > 0) {
           pageCtx.clearRect(0, 0, pageCanvas.width, pageCanvas.height);
-          pageCtx.drawImage(canvas, 0, sY, canvas.width, pxPageHeight, 0, 0, pageCanvas.width, pageCanvas.height);
+          pageCtx.drawImage(
+            canvas,
+            0,
+            sY,
+            canvas.width,
+            pxPageHeight,
+            0,
+            0,
+            pageCanvas.width,
+            pageCanvas.height
+          );
           const pageData = pageCanvas.toDataURL("image/png");
           if (pdf.getNumberOfPages() > 0) pdf.addPage();
           pdf.addImage(pageData, "PNG", 0, 0, pageWidth, pageHeight);
@@ -269,10 +281,9 @@ const summaryByPerson = useMemo(() => {
     const pdf = new jsPDF({ orientation: "p", unit: "pt", format: "a4" });
 
     if (exportMode === "interno") {
-      // Build one printable block with ALL selected people (internal detailed view)
       const printable = document.createElement("div");
       printable.style.padding = "24px";
-      printable.style.width = "794px"; // A4 width at ~96dpi
+      printable.style.width = "794px";
       printable.style.background = "white";
       printable.style.color = "black";
 
@@ -303,6 +314,7 @@ const summaryByPerson = useMemo(() => {
             <thead>
               <tr>
                 <th style="border-bottom:1px solid #ddd;text-align:left;padding:6px;">Artikel</th>
+                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Količina</th>
                 <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">CNY</th>
                 <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">EUR</th>
                 <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Teža (g)</th>
@@ -313,17 +325,40 @@ const summaryByPerson = useMemo(() => {
               </tr>
             </thead>
             <tbody>
-              ${rows.map((r) => `
+              ${rows
+                .map(
+                  (r) => `
                 <tr>
-                  <td style=\"border-bottom:1px solid #f0f0f0;padding:6px;\">${esc(r.artikel)}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.cny)}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.eur)}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.weight)}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.shipPart)}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.together)}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.regular)}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(r.profit)}</td>
-                </tr>`).join("")}
+                  <td style=\"border-bottom:1px solid #f0f0f0;padding:6px;\">${esc(
+                    r.artikel
+                  )}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
+                    r.qty
+                  )}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
+                    r.cny
+                  )}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
+                    r.eur
+                  )}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
+                    r.weightTotal
+                  )}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
+                    r.shipPart
+                  )}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
+                    r.together
+                  )}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
+                    r.regular
+                  )}</td>
+                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
+                    r.profit
+                  )}</td>
+                </tr>`
+                )
+                .join("")}
             </tbody>
           </table>
           <div style="display:flex;justify-content:flex-end;gap:16px;margin-top:8px;font-size:12px;">
@@ -354,7 +389,6 @@ const summaryByPerson = useMemo(() => {
       await addPrintableToPdf(pdf, printable);
     } else {
       // ========== CLIENT PDF (Za stranko) ==========
-      // One page per selected person; clean invoice-like layout without profit/tečaji
       let first = true;
       let nextCounter = invCounter;
       for (const who of selectedWho) {
@@ -369,18 +403,11 @@ const summaryByPerson = useMemo(() => {
         section.style.color = "black";
 
         section.innerHTML = `
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
-            <div>
-              <div style="font-size:18px;font-weight:700;">${esc(myInfo.name || "")}</div>
-              <div style="font-size:12px;white-space:pre-line;">${esc(myInfo.address || "")}</div>
-              <div style="font-size:12px;">${esc(myInfo.email || "")}${myInfo.phone ? " • " + esc(myInfo.phone) : ""}</div>
-            </div>
-            <div style="text-align:right;">
-              <div style="font-size:18px;font-weight:700;">Račun</div>
-              <div style="font-size:12px;opacity:0.8;">Račun št.: ${esc(invoiceNo)}</div>
-              <div style="font-size:12px;opacity:0.8;">Datum: ${new Date().toLocaleDateString()}</div>
-              <div style="font-size:12px;opacity:0.8;">Kupec: ${esc(who)}</div>
-            </div>
+          <div style="margin-bottom:16px;">
+            <div style="font-size:18px;font-weight:700;">Račun</div>
+            <div style="font-size:12px;opacity:0.8;">Račun št.: ${esc(invoiceNo)}</div>
+            <div style="font-size:12px;opacity:0.8;">Datum: ${new Date().toLocaleDateString()}</div>
+            <div style="font-size:12px;opacity:0.8;">Kupec: ${esc(who)}</div>
           </div>
 
           <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -393,13 +420,27 @@ const summaryByPerson = useMemo(() => {
               </tr>
             </thead>
             <tbody>
-              ${rows.map((r) => `
+              ${rows
+                .map((r) => {
+                  const qty = num(r.qty) || 1;
+                  const priceEach = qty ? r.together / qty : r.together;
+                  return `
                 <tr>
-                  <td style=\"border-bottom:1px solid #e5e5e5;padding:6px;\">${esc(r.artikel || "Artikel")}</td>
-                  <td style=\"border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;\">1,00</td>
-                  <td style=\"border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;\">${fmt(r.together)}</td>
-                  <td style=\"border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;\">${fmt(r.together)}</td>
-                </tr>`).join("")}
+                  <td style=\"border-bottom:1px solid #e5e5e5;padding:6px;\">${esc(
+                    r.artikel || "Artikel"
+                  )}</td>
+                  <td style=\"border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;\">${fmt(
+                    qty
+                  )}</td>
+                  <td style=\"border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;\">${fmt(
+                    priceEach
+                  )}</td>
+                  <td style=\"border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;\">${fmt(
+                    r.together
+                  )}</td>
+                </tr>`;
+                })
+                .join("")}
             </tbody>
           </table>
 
@@ -408,11 +449,15 @@ const summaryByPerson = useMemo(() => {
               <tbody>
                 <tr>
                   <td style="padding:6px;border-top:1px solid #000;">Skupaj</td>
-                  <td style="padding:6px;border-top:1px solid #000;text-align:right;">${fmt(subTotal)} EUR</td>
+                  <td style="padding:6px;border-top:1px solid #000;text-align:right;">${fmt(
+                    subTotal
+                  )} EUR</td>
                 </tr>
                 <tr>
                   <td style="padding:6px;font-weight:700;border-top:1px solid #000;">Za plačilo</td>
-                  <td style="padding:6px;font-weight:700;border-top:1px solid #000;text-align:right;">${fmt(subTotal)} EUR</td>
+                  <td style="padding:6px;font-weight:700;border-top:1px solid #000;text-align:right;">${fmt(
+                    subTotal
+                  )} EUR</td>
                 </tr>
               </tbody>
             </table>
@@ -424,10 +469,8 @@ const summaryByPerson = useMemo(() => {
         if (!first) pdf.addPage();
         await addPrintableToPdf(pdf, section);
         first = false;
-        nextCounter += 1; // povečaj za naslednji račun
+        nextCounter += 1;
       }
-
-      // po exportu posodobi števec
       setInvCounter(nextCounter);
     }
 
@@ -444,7 +487,7 @@ const summaryByPerson = useMemo(() => {
           </div>
           <div className="flex items-center gap-2">
             <button onClick={addRow} className="inline-flex items-center gap-2 rounded-2xl border px-3 py-2 shadow-sm hover:bg-neutral-100"><Plus className="h-4 w-4"/>Dodaj artikel</button>
-            <button onClick={() => setShowHistory(v=>!v)} className="inline-flex items-center gap-2 rounded-2xl border px-3 py-2 shadow-sm hover:bg-neutral-100"><History className="h-4 w-4"/>Zgodovina</button>
+            <button onClick={() => setShowHistory((v) => !v)} className="inline-flex items-center gap-2 rounded-2xl border px-3 py-2 shadow-sm hover:bg-neutral-100"><History className="h-4 w-4"/>Zgodovina</button>
           </div>
         </header>
 
@@ -452,13 +495,13 @@ const summaryByPerson = useMemo(() => {
         <section className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="rounded-2xl bg-white p-4 shadow">
             <div className="flex items-center gap-2 font-semibold mb-2"><Settings className="h-4 w-4"/>Tečaji</div>
-            <LabelInput label="Original razmerje (B35, CNY/USD)" value={origRatio} onChange={(v)=> setOrigRatio(num(v))}/>
-            <LabelInput label="Moj tečaj (E35, CNY/EUR)" value={myRatio} onChange={(v)=> setMyRatio(num(v))}/>
+            <LabelInput label="Original razmerje (B35, CNY/USD)" value={origRatio} onChange={(v) => setOrigRatio(num(v))} />
+            <LabelInput label="Moj tečaj (E35, CNY/EUR)" value={myRatio} onChange={(v) => setMyRatio(num(v))} />
             <div className="text-sm text-neutral-600 mt-2">G35 (USD/EUR) = B35 / E35 = <b>{fmt(usdPerEur)}</b></div>
           </div>
           <div className="rounded-2xl bg-white p-4 shadow">
             <div className="flex items-center gap-2 font-semibold mb-2"><PackageSearch className="h-4 w-4"/>Poštnina</div>
-            <LabelInput label="Poštnina (CNY, B41)" value={shippingCNY} onChange={(v)=> setShippingCNY(num(v))}/>
+            <LabelInput label="Poštnina (CNY, B41)" value={shippingCNY} onChange={(v) => setShippingCNY(num(v))} />
             <div className="text-sm text-neutral-600 mt-2">Poštnina EUR = <b>{fmt(shippingEUR)}</b></div>
           </div>
           <div className="rounded-2xl bg-white p-4 shadow">
@@ -466,8 +509,8 @@ const summaryByPerson = useMemo(() => {
             <div className="space-y-2">
               {people.map((p, i) => (
                 <div key={i} className="flex items-center gap-2">
-                  <input className="flex-1 rounded-xl border px-3 py-2" value={p} onChange={(e)=> setPeople((s)=> s.map((v,idx)=> idx===i ? e.target.value : v ))} placeholder={`oseba #${i+1}`}/>
-                  <button className="p-2 text-red-600 hover:bg-red-50 rounded-xl" onClick={()=> delPerson(i)}><Trash2 className="h-4 w-4"/></button>
+                  <input className="flex-1 rounded-xl border px-3 py-2" value={p} onChange={(e) => setPeople((s) => s.map((v, idx) => (idx === i ? e.target.value : v)))} placeholder={`oseba #${i + 1}`} />
+                  <button className="p-2 text-red-600 hover:bg-red-50 rounded-xl" onClick={() => delPerson(i)}><Trash2 className="h-4 w-4"/></button>
                 </div>
               ))}
             </div>
@@ -475,37 +518,18 @@ const summaryByPerson = useMemo(() => {
           </div>
         </section>
 
-        {/* My details for client invoice + numbering */}
+        {/* Številčenje računov */}
         <section className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="rounded-2xl bg-white p-4 shadow md:col-span-3">
-            <div className="flex items-center gap-2 font-semibold mb-2"><UserCircle2 className="h-4 w-4"/>Moji podatki (glava računa – za stranko)</div>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-              <label className="text-sm">
-                <span className="text-neutral-700">Ime/Podjetje</span>
-                <input className="mt-1 w-full rounded-xl border px-3 py-2" value={myInfo.name} onChange={(e)=> setMyInfo((x)=> ({...x, name: e.target.value}))} placeholder="npr. Jakob R."/>
-              </label>
-              <label className="text-sm md:col-span-2">
-                <span className="text-neutral-700">Naslov</span>
-                <input className="mt-1 w-full rounded-xl border px-3 py-2" value={myInfo.address} onChange={(e)=> setMyInfo((x)=> ({...x, address: e.target.value}))} placeholder="Ulica 1, 1000 Ljubljana"/>
-              </label>
-              <label className="text-sm">
-                <span className="text-neutral-700">Telefon</span>
-                <input className="mt-1 w-full rounded-xl border px-3 py-2" value={myInfo.phone} onChange={(e)=> setMyInfo((x)=> ({...x, phone: e.target.value}))} placeholder="070 123 456"/>
-              </label>
-              <label className="text-sm md:col-span-4">
-                <span className="text-neutral-700">E-pošta</span>
-                <input className="mt-1 w-full rounded-xl border px-3 py-2" value={myInfo.email} onChange={(e)=> setMyInfo((x)=> ({...x, email: e.target.value}))} placeholder="ime@domena.si"/>
-              </label>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+            <div className="text-sm font-semibold mb-2">Številčenje računov</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <label className="text-sm">
                 <span className="text-neutral-700">Prefix računa</span>
-                <input className="mt-1 w-full rounded-xl border px-3 py-2" value={invPrefix} onChange={(e)=> setInvPrefix(e.target.value)} placeholder="RAC-2025-"/>
+                <input className="mt-1 w-full rounded-xl border px-3 py-2" value={invPrefix} onChange={(e) => setInvPrefix(e.target.value)} placeholder="RAC-2025-" />
               </label>
               <label className="text-sm">
                 <span className="text-neutral-700">Naslednja številka</span>
-                <input type="number" className="mt-1 w-full rounded-xl border px-3 py-2" value={invCounter} onChange={(e)=> setInvCounter(Number(e.target.value)||1)} />
+                <input type="number" className="mt-1 w-full rounded-xl border px-3 py-2" value={invCounter} onChange={(e) => setInvCounter(Number(e.target.value) || 1)} />
               </label>
               <div className="text-sm flex items-end">Naslednji račun: <b className="ml-2">{invPrefix}{String(invCounter).padStart(3, "0")}</b></div>
             </div>
@@ -519,6 +543,7 @@ const summaryByPerson = useMemo(() => {
               <thead className="bg-neutral-100 text-neutral-700">
                 <tr>
                   <Th>Artikel</Th>
+                  <Th className="text-right">Količina</Th>
                   <Th className="text-right">CNY</Th>
                   <Th className="text-right">EUR</Th>
                   <Th className="text-right">Teža (g)</Th>
@@ -535,14 +560,17 @@ const summaryByPerson = useMemo(() => {
                 {computedRows.map((r) => (
                   <tr key={r.id} className="border-b last:border-0">
                     <Td>
-                      <input className="w-full rounded-xl border px-3 py-2" value={r.artikel} onChange={(e)=> updateRow(r.id, "artikel", e.target.value)} placeholder="npr. pulover"/>
+                      <input className="w-full rounded-xl border px-3 py-2" value={r.artikel} onChange={(e) => updateRow(r.id, "artikel", e.target.value)} placeholder="npr. pulover" />
                     </Td>
                     <Td className="text-right">
-                      <input type="number" inputMode="decimal" className="w-28 rounded-xl border px-3 py-2 text-right" value={r.cny} onChange={(e)=> updateRow(r.id, "cny", e.target.value)} placeholder="CNY"/>
+                      <input type="number" min="1" step="1" className="w-24 rounded-xl border px-3 py-2 text-right" value={r.qty} onChange={(e) => updateRow(r.id, "qty", e.target.value)} />
+                    </Td>
+                    <Td className="text-right">
+                      <input type="number" inputMode="decimal" className="w-28 rounded-xl border px-3 py-2 text-right" value={r.cny} onChange={(e) => updateRow(r.id, "cny", e.target.value)} placeholder="CNY" />
                     </Td>
                     <Td className="text-right tabular-nums">{fmt(r.eur)}</Td>
                     <Td className="text-right">
-                      <input type="number" inputMode="decimal" className="w-28 rounded-xl border px-3 py-2 text-right" value={r.weight} onChange={(e)=> updateRow(r.id, "weight", e.target.value)} placeholder="g"/>
+                      <input type="number" inputMode="decimal" className="w-28 rounded-xl border px-3 py-2 text-right" value={r.weight} onChange={(e) => updateRow(r.id, "weight", e.target.value)} placeholder="g" />
                     </Td>
                     <Td className="text-right tabular-nums">{fmt(r.weightPct)}%</Td>
                     <Td className="text-right tabular-nums">{fmt(r.shipPart)}</Td>
@@ -550,13 +578,19 @@ const summaryByPerson = useMemo(() => {
                     <Td className="text-right tabular-nums">{fmt(r.regular)}</Td>
                     <Td className="text-right tabular-nums">{fmt(r.profit)}</Td>
                     <Td>
-                      <select className="w-36 rounded-xl border px-3 py-2" value={r.who || ""} onChange={(e)=> updateRow(r.id, "who", e.target.value)}>
+                      <select className="w-36 rounded-xl border px-3 py-2" value={r.who || ""} onChange={(e) => updateRow(r.id, "who", e.target.value)}>
                         <option value="">—</option>
-                        {people.filter(Boolean).map((p)=> <option key={p} value={p}>{p}</option>)}
+                        {people.filter(Boolean).map((p) => (
+                          <option key={p} value={p}>
+                            {p}
+                          </option>
+                        ))}
                       </select>
                     </Td>
                     <Td className="text-right">
-                      <button onClick={()=> delRow(r.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-xl"><Trash2 className="h-4 w-4"/></button>
+                      <button onClick={() => delRow(r.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-xl">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
                     </Td>
                   </tr>
                 ))}
@@ -564,12 +598,24 @@ const summaryByPerson = useMemo(() => {
             </table>
           </div>
           <div className="flex flex-wrap items-center gap-4 p-4 text-sm text-neutral-700 bg-neutral-50">
-            <span><b>Skupna teža:</b> {fmt(totalWeight)} g</span>
-            <span><b>Skupaj CNY:</b> {fmt(totalCNY)}</span>
-            <span><b>Poštnina EUR:</b> {fmt(shippingEUR)}</span>
-            <span><b>G35 (USD/EUR):</b> {fmt(usdPerEur)}</span>
-            <span><b>Skupaj EUR:</b> {fmt(grandTogether)}</span>
-            <span><b>"Zaslužek" (tečajna razlika):</b> {fmt(rateProfit)}</span>
+            <span>
+              <b>Skupna teža:</b> {fmt(totalWeight)} g
+            </span>
+            <span>
+              <b>Skupaj CNY:</b> {fmt(totalCNY)}
+            </span>
+            <span>
+              <b>Poštnina EUR:</b> {fmt(shippingEUR)}
+            </span>
+            <span>
+              <b>G35 (USD/EUR):</b> {fmt(usdPerEur)}
+            </span>
+            <span>
+              <b>Skupaj EUR:</b> {fmt(grandTogether)}
+            </span>
+            <span>
+              <b>"Zaslužek" (tečajna razlika):</b> {fmt(rateProfit)}
+            </span>
           </div>
         </section>
 
@@ -577,7 +623,9 @@ const summaryByPerson = useMemo(() => {
         <section className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="rounded-2xl bg-white p-4 shadow">
             <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2 font-semibold"><Users className="h-4 w-4"/>Povzetek po osebi</div>
+              <div className="flex items-center gap-2 font-semibold">
+                <Users className="h-4 w-4" />Povzetek po osebi
+              </div>
               <div className="text-sm text-neutral-600">Minimum = EUR / G35</div>
             </div>
             <div className="overflow-x-auto">
@@ -598,7 +646,14 @@ const summaryByPerson = useMemo(() => {
                       <Td className="text-right tabular-nums">{fmt(r.eur)}</Td>
                       <Td className="text-right tabular-nums">{fmt(r.minimum)}</Td>
                       <Td className="text-right">
-                        <input type="number" inputMode="decimal" className="w-28 rounded-xl border px-3 py-2 text-right" value={receivedMap[r.who] ?? ""} onChange={(e)=> setReceivedMap((m)=> ({...m, [r.who]: e.target.value}))} placeholder="EUR"/>
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          className="w-28 rounded-xl border px-3 py-2 text-right"
+                          value={receivedMap[r.who] ?? ""}
+                          onChange={(e) => setReceivedMap((m) => ({ ...m, [r.who]: e.target.value }))}
+                          placeholder="EUR"
+                        />
                       </Td>
                       <Td className={`text-right tabular-nums ${r.eur - num(receivedMap[r.who]) > 0 ? "text-red-600" : "text-green-700"}`}>{fmt(r.due)}</Td>
                     </tr>
@@ -610,45 +665,66 @@ const summaryByPerson = useMemo(() => {
 
           {/* Export + Save */}
           <div className="rounded-2xl bg-white p-4 shadow">
-            <div className="font-semibold mb-2 flex items-center gap-2"><FileDown className="h-4 w-4"/>Export & Shrani</div>
+            <div className="font-semibold mb-2 flex items-center gap-2">
+              <FileDown className="h-4 w-4" />Export & Shrani
+            </div>
             <div className="space-y-3">
               <div className="rounded-xl border p-3">
-                <div className="text-sm font-medium mb-2 flex items-center gap-2"><FileText className="h-4 w-4"/>PDF Export</div>
+                <div className="text-sm font-medium mb-2 flex items-center gap-2">
+                  <FileText className="h-4 w-4" />PDF Export
+                </div>
                 <div className="flex flex-wrap items-center gap-4 mb-2">
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={exportSelection.all} onChange={(e)=> setExportSelection((s)=> ({...s, all: e.target.checked}))}/>
+                    <input
+                      type="checkbox"
+                      checked={exportSelection.all}
+                      onChange={(e) => setExportSelection((s) => ({ ...s, all: e.target.checked }))}
+                    />
                     <span>Vsi</span>
                   </label>
                   <div className="flex items-center gap-3 text-sm">
                     <span className="text-neutral-700">Način:</span>
                     <label className="inline-flex items-center gap-2">
-                      <input type="radio" name="mode" checked={exportMode === "interno"} onChange={()=> setExportMode("interno")} />
+                      <input type="radio" name="mode" checked={exportMode === "interno"} onChange={() => setExportMode("interno")} />
                       <span>Interno</span>
                     </label>
                     <label className="inline-flex items-center gap-2">
-                      <input type="radio" name="mode" checked={exportMode === "stranka"} onChange={()=> setExportMode("stranka")} />
+                      <input type="radio" name="mode" checked={exportMode === "stranka"} onChange={() => setExportMode("stranka")} />
                       <span>Za stranko</span>
                     </label>
                   </div>
                 </div>
                 {!exportSelection.all && (
                   <div className="flex flex-wrap gap-2 mb-2">
-                    {people.filter(Boolean).map((p)=> (
+                    {people.filter(Boolean).map((p) => (
                       <label key={p} className="inline-flex items-center gap-2 border rounded-xl px-2 py-1">
-                        <input type="checkbox" checked={exportSelection.who.includes(p)} onChange={(e)=> setExportSelection((s)=> ({...s, who: e.target.checked ? [...s.who, p] : s.who.filter((x)=> x!==p)}))}/>
+                        <input
+                          type="checkbox"
+                          checked={exportSelection.who.includes(p)}
+                          onChange={(e) =>
+                            setExportSelection((s) => ({
+                              ...s,
+                              who: e.target.checked ? [...s.who, p] : s.who.filter((x) => x !== p),
+                            }))
+                          }
+                        />
                         <span>{p}</span>
                       </label>
                     ))}
                   </div>
                 )}
-                <button onClick={handleExportPDF} className="inline-flex items-center gap-2 rounded-2xl border px-3 py-2 shadow-sm hover:bg-neutral-100"><Download className="h-4 w-4"/>Export PDF</button>
+                <button onClick={handleExportPDF} className="inline-flex items-center gap-2 rounded-2xl border px-3 py-2 shadow-sm hover:bg-neutral-100">
+                  <Download className="h-4 w-4" />Export PDF
+                </button>
               </div>
 
               <div className="rounded-xl border p-3">
                 <div className="text-sm font-medium mb-2">Shrani paket</div>
                 <div className="flex items-center gap-2">
-                  <input className="flex-1 rounded-xl border px-3 py-2" placeholder="ime paketa (npr. avgust-2025)" value={pkgName} onChange={(e)=> setPkgName(e.target.value)}/>
-                  <button onClick={savePackage} className="inline-flex items-center gap-2 rounded-2xl border px-3 py-2 shadow-sm hover:bg-neutral-100"><Save className="h-4 w-4"/>Shrani</button>
+                  <input className="flex-1 rounded-xl border px-3 py-2" placeholder="ime paketa (npr. avgust-2025)" value={pkgName} onChange={(e) => setPkgName(e.target.value)} />
+                  <button onClick={savePackage} className="inline-flex items-center gap-2 rounded-2xl border px-3 py-2 shadow-sm hover:bg-neutral-100">
+                    <Save className="h-4 w-4" />Shrani
+                  </button>
                 </div>
               </div>
             </div>
@@ -657,14 +733,20 @@ const summaryByPerson = useMemo(() => {
 
         {/* History Drawer */}
         {showHistory && (
-          <section className="fixed inset-0 bg-black/40 flex justify-end z-50" onClick={()=> setShowHistory(false)}>
-            <div className="w-full max-w-2xl bg-white h-full p-4 overflow-y-auto" onClick={(e)=> e.stopPropagation()}>
+          <section className="fixed inset-0 bg-black/40 flex justify-end z-50" onClick={() => setShowHistory(false)}>
+            <div className="w-full max-w-2xl bg-white h-full p-4 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-3">
-                <div className="font-semibold flex items-center gap-2"><History className="h-4 w-4"/>Shranjeni paketi</div>
-                <button className="rounded-xl border px-3 py-1" onClick={()=> setShowHistory(false)}>Zapri</button>
+                <div className="font-semibold flex items-center gap-2">
+                  <History className="h-4 w-4" />Shranjeni paketi
+                </div>
+                <button className="rounded-xl border px-3 py-1" onClick={() => setShowHistory(false)}>
+                  Zapri
+                </button>
               </div>
               <div className="space-y-3">
-                {packages.length === 0 && <div className="text-sm text-neutral-600">Ni shranjenih paketov.</div>}
+                {packages.length === 0 && (
+                  <div className="text-sm text-neutral-600">Ni shranjenih paketov.</div>
+                )}
                 {packages.map((p) => (
                   <div key={p.id} className="rounded-xl border p-3">
                     <div className="flex items-center justify-between">
@@ -673,22 +755,38 @@ const summaryByPerson = useMemo(() => {
                         <div className="text-xs text-neutral-600">{new Date(p.createdAt).toLocaleString()}</div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <button className="rounded-xl border px-2 py-1 text-sm flex items-center gap-1" onClick={()=> setPreviewPkg(p)}><Eye className="h-4 w-4"/>Pregled</button>
-                        <button className="rounded-xl border px-2 py-1 text-sm" onClick={()=> loadPackageToDraft(p)}>Naloži v osnutek</button>
-                        <button className="p-2 text-red-600 hover:bg-red-50 rounded-xl" onClick={()=> deletePackage(p.id)}><Trash2 className="h-4 w-4"/></button>
+                        <button className="rounded-xl border px-2 py-1 text-sm flex items-center gap-1" onClick={() => setPreviewPkg(p)}>
+                          <Eye className="h-4 w-4" />Pregled
+                        </button>
+                        <button className="rounded-xl border px-2 py-1 text-sm" onClick={() => loadPackageToDraft(p)}>
+                          Naloži v osnutek
+                        </button>
+                        <button className="p-2 text-red-600 hover:bg-red-50 rounded-xl" onClick={() => deletePackage(p.id)}>
+                          <Trash2 className="h-4 w-4" />
+                        </button>
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-sm mt-2">
-                      <div><b>Skupaj EUR:</b> {fmt(p.derived.grandTogether)}</div>
-                      <div><b>Skupna teža:</b> {fmt(p.derived.totalWeight)} g</div>
-                      <div><b>Poštnina EUR:</b> {fmt(p.derived.shippingEUR)}</div>
-                      <div><b>Zaslužek (teč.):</b> {fmt(p.derived.rateProfit)}</div>
+                      <div>
+                        <b>Skupaj EUR:</b> {fmt(p.derived.grandTogether)}
+                      </div>
+                      <div>
+                        <b>Skupna teža:</b> {fmt(p.derived.totalWeight)} g
+                      </div>
+                      <div>
+                        <b>Poštnina EUR:</b> {fmt(p.derived.shippingEUR)}
+                      </div>
+                      <div>
+                        <b>Zaslužek (teč.):</b> {fmt(p.derived.rateProfit)}
+                      </div>
                     </div>
                     <div className="mt-2">
                       <div className="text-xs text-neutral-600 mb-1">Po osebah (skupaj EUR):</div>
                       <div className="flex flex-wrap gap-2">
                         {p.derived.summaryByPerson.map((row) => (
-                          <span key={row.who} className="rounded-full border px-2 py-1 text-xs">{row.who}: {fmt(row.eur)}</span>
+                          <span key={row.who} className="rounded-full border px-2 py-1 text-xs">
+                            {row.who}: {fmt(row.eur)}
+                          </span>
                         ))}
                       </div>
                     </div>
@@ -701,36 +799,58 @@ const summaryByPerson = useMemo(() => {
 
         {/* PREVIEW OVERLAY */}
         {previewPkg && (
-          <section className="fixed inset-0 bg-black/40 z-[60] flex justify-center items-center p-4" onClick={()=> setPreviewPkg(null)}>
-            <div className="bg-white rounded-2xl shadow max-w-5xl w-full max-h-[90vh] overflow-auto" onClick={(e)=> e.stopPropagation()}>
+          <section className="fixed inset-0 bg-black/40 z-[60] flex justify-center items-center p-4" onClick={() => setPreviewPkg(null)}>
+            <div className="bg-white rounded-2xl shadow max-w-5xl w-full max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
               <div className="p-4 border-b flex items-center justify-between">
                 <div>
                   <div className="font-semibold">{previewPkg.name}</div>
                   <div className="text-xs text-neutral-600">{new Date(previewPkg.createdAt).toLocaleString()}</div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button className="rounded-xl border px-3 py-1" onClick={()=> { loadPackageToDraft(previewPkg); }}>Naloži v osnutek</button>
-                  <button className="rounded-xl border px-3 py-1" onClick={()=> setPreviewPkg(null)}>Zapri</button>
+                  <button className="rounded-xl border px-3 py-1" onClick={() => { loadPackageToDraft(previewPkg); }}>
+                    Naloži v osnutek
+                  </button>
+                  <button className="rounded-xl border px-3 py-1" onClick={() => setPreviewPkg(null)}>
+                    Zapri
+                  </button>
                 </div>
               </div>
               <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="text-sm">
                   <div className="font-medium mb-1">Parametri</div>
                   <div className="grid grid-cols-2 gap-2">
-                    <div>Orig(B35): <b>{fmt(previewPkg.origRatio)}</b></div>
-                    <div>Moj(E35): <b>{fmt(previewPkg.myRatio)}</b></div>
-                    <div>USD/EUR (G35): <b>{fmt(previewPkg.derived.usdPerEur)}</b></div>
-                    <div>Poštnina CNY: <b>{fmt(previewPkg.shippingCNY)}</b></div>
-                    <div>Poštnina EUR: <b>{fmt(previewPkg.derived.shippingEUR)}</b></div>
+                    <div>
+                      Orig(B35): <b>{fmt(previewPkg.origRatio)}</b>
+                    </div>
+                    <div>
+                      Moj(E35): <b>{fmt(previewPkg.myRatio)}</b>
+                    </div>
+                    <div>
+                      USD/EUR (G35): <b>{fmt(previewPkg.derived.usdPerEur)}</b>
+                    </div>
+                    <div>
+                      Poštnina CNY: <b>{fmt(previewPkg.shippingCNY)}</b>
+                    </div>
+                    <div>
+                      Poštnina EUR: <b>{fmt(previewPkg.derived.shippingEUR)}</b>
+                    </div>
                   </div>
                 </div>
                 <div className="text-sm">
                   <div className="font-medium mb-1">Povzetek</div>
                   <div className="grid grid-cols-2 gap-2">
-                    <div>Skupaj EUR: <b>{fmt(previewPkg.derived.grandTogether)}</b></div>
-                    <div>Skupna teža: <b>{fmt(previewPkg.derived.totalWeight)} g</b></div>
-                    <div>Skupaj CNY: <b>{fmt(previewPkg.derived.totalCNY)}</b></div>
-                    <div>"Zaslužek" (teč.): <b>{fmt(previewPkg.derived.rateProfit)}</b></div>
+                    <div>
+                      Skupaj EUR: <b>{fmt(previewPkg.derived.grandTogether)}</b>
+                    </div>
+                    <div>
+                      Skupna teža: <b>{fmt(previewPkg.derived.totalWeight)} g</b>
+                    </div>
+                    <div>
+                      Skupaj CNY: <b>{fmt(previewPkg.derived.totalCNY)}</b>
+                    </div>
+                    <div>
+                      "Zaslužek" (teč.): <b>{fmt(previewPkg.derived.rateProfit)}</b>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -741,6 +861,7 @@ const summaryByPerson = useMemo(() => {
                     <thead className="bg-neutral-100 text-neutral-700">
                       <tr>
                         <Th>Artikel</Th>
+                        <Th className="text-right">Količina</Th>
                         <Th className="text-right">CNY</Th>
                         <Th className="text-right">EUR</Th>
                         <Th className="text-right">Teža</Th>
@@ -753,9 +874,10 @@ const summaryByPerson = useMemo(() => {
                       {computeRows({ items: previewPkg.items, myRatio: previewPkg.myRatio, shippingCNY: previewPkg.shippingCNY, origRatio: previewPkg.origRatio }).map((r) => (
                         <tr key={r.id} className="border-b last:border-0">
                           <Td>{r.artikel}</Td>
+                          <Td className="text-right">{fmt(r.qty)}</Td>
                           <Td className="text-right">{fmt(r.cny)}</Td>
                           <Td className="text-right">{fmt(r.eur)}</Td>
-                          <Td className="text-right">{fmt(r.weight)}</Td>
+                          <Td className="text-right">{fmt(r.weightTotal)}</Td>
                           <Td className="text-right">{fmt(r.shipPart)}</Td>
                           <Td className="text-right font-medium">{fmt(r.together)}</Td>
                           <Td>{r.who}</Td>
@@ -775,69 +897,63 @@ const summaryByPerson = useMemo(() => {
       </div>
 
       {/* Hidden ref for potential future print areas */}
-      <div ref={printRef} className="hidden"/>
+      <div ref={printRef} className="hidden" />
     </div>
   );
 }
 
 // ===== Small UI helpers =====
 function Th({ children, className = "" }) {
-  return (
-    <th className={`px-3 py-2 text-left text-xs font-semibold ${className}`}>{children}</th>
-  );
+  return <th className={`px-3 py-2 text-left text-xs font-semibold ${className}`}>{children}</th>;
 }
 function Td({ children, className = "" }) {
-  return (
-    <td className={`px-3 py-2 align-top ${className}`}>{children}</td>
-  );
+  return <td className={`px-3 py-2 align-top ${className}`}>{children}</td>;
 }
 function LabelInput({ label, value, onChange }) {
   return (
     <label className="block text-sm">
       <span className="text-neutral-700">{label}</span>
-      <input type="number" inputMode="decimal" className="mt-1 w-full rounded-xl border px-3 py-2" value={value} onChange={(e)=> onChange(e.target.value)} />
+      <input type="number" inputMode="decimal" className="mt-1 w-full rounded-xl border px-3 py-2" value={value} onChange={(e) => onChange(e.target.value)} />
     </label>
   );
 }
 
 // ===== Utils =====
-function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
-function safe(v) { const n = Number(v); return !n || !Number.isFinite(n) ? 1 : n; }
-function sum(arr) { return arr.reduce((a,b)=> a + (Number.isFinite(b)? b : 0), 0); }
-function fmt(n) { return (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }); }
-function uid() { return Math.random().toString(36).slice(2, 10); }
-function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c)=> ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+function safe(v) {
+  const n = Number(v);
+  return !n || !Number.isFinite(n) ? 1 : n;
+}
+function sum(arr) {
+  return arr.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
+}
+function fmt(n) {
+  return (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+function uid() {
+  return Math.random().toString(36).slice(2, 10);
+}
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
 
 function computeRows({ items, myRatio, shippingCNY, origRatio }) {
-  const wTotal = sum(items.map((r) => num(r.weight))) || 1;
+  const wTotal = sum(items.map((r) => (num(r.weight) * (num(r.qty) || 1)))) || 1;
   const shippingEUR = shippingCNY ? shippingCNY / safe(myRatio) : 0;
   const usdPerEur = safe(origRatio) / safe(myRatio);
   return items.map((r) => {
-    const cny = num(r.cny);
-    const weight = num(r.weight);
-    const eur = cny / safe(myRatio);
-    const shipPart = (weight / wTotal) * shippingEUR;
+    const qty = num(r.qty) || 1;
+    const cnyTotal = num(r.cny) * qty;
+    const weightTotal = num(r.weight) * qty;
+    const eur = cnyTotal / safe(myRatio);
+    const shipPart = (weightTotal / wTotal) * shippingEUR;
     const together = eur + shipPart;
     const regular = together / safe(usdPerEur);
     const profit = together - regular;
-    const weightPct = wTotal ? (weight / wTotal) * 100 : 0;
-    return { ...r, eur, shipPart, together, regular, profit, weightPct };
-  });
-}
-
-function summarizeByPerson({ people, rows, usdPerEur, receivedMap }) {
-  const map = new Map();
-  for (const p of people) map.set(p, 0);
-  for (const row of rows) {
-    const key = row.who?.trim();
-    if (!key) continue;
-    map.set(key, safe(map.get(key)) + row.together);
-  }
-  return people.map((p) => {
-    const eur = num(map.get(p));
-    const minimum = eur / safe(usdPerEur);
-    const received = num(receivedMap[p]);
-    const due = eur - received;
-    return { who: p, eur, minimum, received, due };
+    const weightPct = wTotal ? (weightTotal / wTotal) * 100 : 0;
+    return { ...r, qty, cny: cnyTotal, weightTotal, eur, shipPart, together, regular, profit, weightPct };
   });
 }
