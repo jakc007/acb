@@ -145,7 +145,19 @@ export default function RealApp() {
   const computedRows = useMemo(() => computeRows({ items, myRatio, shippingCNY, origRatio }), [items, myRatio, shippingCNY, origRatio]);
 
   // Summary per person
-  const summaryByPerson = useMemo(() => summarizeByPerson({ people, rows: computedRows, usdPerEur, receivedMap }), [people, computedRows, usdPerEur, receivedMap]);
+  // Povzetek po osebi – brez +1€, ker ne uporabljamo safe() za seštevanje
+const summaryByPerson = useMemo(() => {
+  return people.map((p) => {
+    const rows = computedRows.filter((r) => (r.who?.trim() || "") === p);
+
+    const eur = rows.reduce((a, r) => a + num(r.together), 0); // num, ne safe
+    const minimum = eur / safe(usdPerEur);                     // tu safe ostane (deljenje)
+    const received = num(receivedMap[p]);
+    const due = eur - received;
+
+    return { who: p, eur, minimum, received, due };
+  });
+}, [people, computedRows, usdPerEur, receivedMap]);
 
   const grandTogether = useMemo(() => sum(computedRows.map((r) => r.together)), [computedRows]);
 
