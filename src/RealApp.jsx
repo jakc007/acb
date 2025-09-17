@@ -538,64 +538,94 @@ const handleExportPDF = async () => {
                 </tr>
               </thead>
               <tbody>
-                {computedRows.map((r) => (
-                  <tr key={r.id} className="border-b last:border-0">
-                    <Td>
-  <input
-    className="w-full min-w-[320px] rounded-xl border px-3 py-2"
-    value={r.artikel}
-    onChange={(e)=> updateRow(r.id, "artikel", e.target.value)}
-    placeholder="npr. pulover"
-  />
-</Td>
+  {computedRows.map((r) => (
+    <tr key={r.id} className="border-b last:border-0">
+      {/* Artikel */}
+      <Td>
+        <input
+          className="w-full min-w-[320px] rounded-xl border px-3 py-2"
+          value={r.artikel}
+          onChange={(e) => updateRow(r.id, "artikel", e.target.value)}
+          placeholder="npr. pulover"
+        />
+      </Td>
 
-<Td className="text-right">
-  <input
-    type="number" min="1" step="1"
-    className="w-16 rounded-xl border px-3 py-2 text-right"
-    value={r.qty}
-    onChange={(e)=> updateRow(r.id, "qty", e.target.value)}
-  />
-</Td>
+      {/* Količina */}
+      <Td className="text-right">
+        <input
+          type="number" min="1" step="1"
+          className="w-16 rounded-xl border px-3 py-2 text-right"
+          value={r.qty}
+          onChange={(e) => updateRow(r.id, "qty", e.target.value)}
+        />
+      </Td>
 
-<Td className="text-right">
-  <input
-    type="number" inputMode="decimal"
-    className="w-20 rounded-xl border px-3 py-2 text-right"
-    value={r.cny}
-    onChange={(e)=> updateRow(r.id, "cny", e.target.value)}
-    placeholder="CNY"
-  />
-</Td>
+      {/* CNY (na kos) */}
+      <Td className="text-right">
+        <input
+          type="number" inputMode="decimal"
+          className="w-20 rounded-xl border px-3 py-2 text-right"
+          value={r.cny}
+          onChange={(e) => updateRow(r.id, "cny", e.target.value)}
+          placeholder="CNY"
+        />
+      </Td>
 
-<Td className="text-right">
-  <input
-    type="number" inputMode="decimal"
-    className="w-20 rounded-xl border px-3 py-2 text-right"
-    value={r.weight}
-    onChange={(e)=> updateRow(r.id, "weight", e.target.value)}
-    placeholder="g"
-  />
-</Td>
+      {/* EUR (izračun) */}
+      <Td className="text-right tabular-nums">{fmt(r.eur)}</Td>
 
-<Td>
-  <select
-    className="w-28 rounded-xl border px-3 py-2"
-    value={r.who || ""}
-    onChange={(e)=> updateRow(r.id, "who", e.target.value)}
-  >
-    <option value="">—</option>
-    {people.filter(Boolean).map((p)=> <option key={p} value={p}>{p}</option>)}
-  </select>
-</Td>
-                    <Td className="text-right">
-                      <button onClick={() => delRow(r.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-xl">
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
+      {/* Teža (g) – total na vrstico */}
+      <Td className="text-right">
+        <input
+          type="number" inputMode="decimal"
+          className="w-20 rounded-xl border px-3 py-2 text-right"
+          value={r.weight}
+          onChange={(e) => updateRow(r.id, "weight", e.target.value)}
+          placeholder="g"
+        />
+      </Td>
+
+      {/* Teža (%) */}
+      <Td className="text-right tabular-nums">{fmt(r.weightPct)}%</Td>
+
+      {/* Poštnina EUR */}
+      <Td className="text-right tabular-nums">{fmt(r.shipPart)}</Td>
+
+      {/* Skupaj EUR */}
+      <Td className="text-right font-medium tabular-nums">{fmt(r.together)}</Td>
+
+      {/* Redna */}
+      <Td className="text-right tabular-nums">{fmt(r.regular)}</Td>
+
+      {/* Profit */}
+      <Td className="text-right tabular-nums">{fmt(r.profit)}</Td>
+
+      {/* Kdo */}
+      <Td>
+        <select
+          className="w-28 rounded-xl border px-3 py-2"
+          value={r.who || ""}
+          onChange={(e) => updateRow(r.id, "who", e.target.value)}
+        >
+          <option value="">—</option>
+          {people.filter(Boolean).map((p) => (
+            <option key={p} value={p}>{p}</option>
+          ))}
+        </select>
+      </Td>
+
+      {/* Delete */}
+      <Td className="text-right">
+        <button
+          onClick={() => delRow(r.id)}
+          className="p-2 text-red-600 hover:bg-red-50 rounded-xl"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      </Td>
+    </tr>
+  ))}
+</tbody>
             </table>
           </div>
           <div className="flex flex-wrap items-center gap-4 p-4 text-sm text-neutral-700 bg-neutral-50">
