@@ -822,7 +822,7 @@ function summarizeByPerson({ people, rows, usdPerEur, receivedMap }) {
     map.set(key, safe(map.get(key)) + row.together);
   }
   return people.map((p) => {
-    const eur = safe(map.get(p));
+    const eur = num(map.get(p));
     const minimum = eur / safe(usdPerEur);
     const received = num(receivedMap[p]);
     const due = eur - received;
