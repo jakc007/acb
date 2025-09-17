@@ -46,6 +46,14 @@ export default function RealApp() {
     const saved = localStorage.getItem("RACUN_DRAFT_RECEIVED");
     return saved ? JSON.parse(saved) : {};
   });
+  // nastavitve po osebi: fee (množitelj) in način ("eur" = Skupaj, "redna" = Minimum)
+  const [personOpts, setPersonOpts] = useState(() => {
+    const saved = localStorage.getItem("RACUN_PERSON_OPTS");
+    return saved ? JSON.parse(saved) : {}; // { [ime]: { fee: 1, mode: "eur"|"redna" } }
+  });
+  useEffect(() => {
+    localStorage.setItem("RACUN_PERSON_OPTS", JSON.stringify(personOpts));
+  }, [personOpts]);
 
   // Avtomatsko številčenje računov (brez osebnih podatkov)
   const defaultPrefix = `RAC-${new Date().getFullYear()}-`;
@@ -99,10 +107,11 @@ export default function RealApp() {
   }, [isSignedIn, user, invPrefix, invCounter]);
 
   // ==== Derived numbers (Excel parity) ====
-  const totalWeight = useMemo(
-    () => sum(items.map((r) => num(r.weight) * (num(r.qty) || 1))),
-    [items]
-  );
+  // skupna teža = vsota vnesenih tež (že total na vrstico), brez množenja s qty
+const totalWeight = useMemo(
+  () => sum(items.map((r) => num(r.weight))),
+  [items]
+);
   const totalCNY = useMemo(
     () => sum(items.map((r) => num(r.cny) * (num(r.qty) || 1))),
     [items]
@@ -123,15 +132,25 @@ export default function RealApp() {
 
   // Povzetek po osebi (brez +1 €)
   const summaryByPerson = useMemo(() => {
-    return people.map((p) => {
-      const rows = computedRows.filter((r) => (r.who?.trim() || "") === p);
-      const eur = rows.reduce((a, r) => a + num(r.together), 0);
-      const minimum = eur / safe(usdPerEur);
-      const received = num(receivedMap[p]);
-      const due = eur - received;
-      return { who: p, eur, minimum, received, due };
-    });
-  }, [people, computedRows, usdPerEur, receivedMap]);
+  return people.map((p) => {
+    const rows = computedRows.filter((r) => (r.who?.trim() || "") === p);
+
+    const eur = rows.reduce((a, r) => a + num(r.together), 0);  // “Skupaj EUR” (artikli + poštnina)
+    const minimum = eur / safe(usdPerEur);                      // “redna” (po G35)
+    const opts = personOpts[p] || { fee: 1, mode: "eur" };
+
+    const base   = opts.mode === "redna" ? minimum : eur;       // baza za zaračunat
+    const feeMul = Number(opts.fee) || 1;
+    const charge = base * feeMul;                               // zaračunana vsota (po tvoji izbiri)
+
+    const received        = num(receivedMap[p]);                // dejansko prejeto
+    const due             = charge - received;                  // še dolžan
+    const profitReceived  = received - minimum;                 // profit po prejetem
+    const profitPlanned   = charge - minimum;                   // pričakovani profit, če plača v celoti
+
+    return { who: p, eur, minimum, charge, received, due, profitReceived, profitPlanned };
+  });
+}, [people, computedRows, usdPerEur, receivedMap, personOpts]);
 
   const grandTogether = useMemo(
     () => sum(computedRows.map((r) => r.together)),
@@ -384,91 +403,90 @@ export default function RealApp() {
 
       await addPrintableToPdf(pdf, printable);
     } else {
-      // ========== CLIENT PDF (Za stranko) ==========
-      let first = true;
-      let nextCounter = invCounter;
-      for (const who of selectedWho) {
-        const rows = computedRows.filter((r) => r.who?.trim() === who);
-        const subTotal = rows.reduce((a, r) => a + r.together, 0);
-        const invoiceNo = `${invPrefix}${String(nextCounter).padStart(3, "0")}`;
+    // ========== CLIENT PDF (Za stranko) ==========
+let first = true;
+let nextCounter = invCounter;
 
-        const section = document.createElement("div");
-        section.style.padding = "24px";
-        section.style.width = "794px";
-        section.style.background = "white";
-        section.style.color = "black";
+for (const who of selectedWho) {
+  const rows = computedRows.filter((r) => r.who?.trim() === who);
 
-        section.innerHTML = `
-          <div style="margin-bottom:16px;">
-            <div style="font-size:18px;font-weight:700;">Račun</div>
-            <div style="font-size:12px;opacity:0.8;">Račun št.: ${esc(invoiceNo)}</div>
-            <div style="font-size:12px;opacity:0.8;">Datum: ${new Date().toLocaleDateString()}</div>
-            <div style="font-size:12px;opacity:0.8;">Kupec: ${esc(who)}</div>
-          </div>
+  // izračun trenutnega "Skupaj" po interni logiki
+  const subTotal = rows.reduce((a, r) => a + r.together, 0);
 
-          <table style="width:100%;border-collapse:collapse;font-size:12px;">
-            <thead>
-              <tr>
-                <th style="border-bottom:1px solid #000;text-align:left;padding:6px;">Naziv</th>
-                <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Količina</th>
-                <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Cena (EUR)</th>
-                <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Vrednost (EUR)</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rows
-                .map((r) => {
-                  const qty = num(r.qty) || 1;
-                  const priceEach = qty ? r.together / qty : r.together;
-                  return `
-                <tr>
-                  <td style=\"border-bottom:1px solid #e5e5e5;padding:6px;\">${esc(
-                    r.artikel || "Artikel"
-                  )}</td>
-                  <td style=\"border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;\">${fmt(
-                    qty
-                  )}</td>
-                  <td style=\"border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;\">${fmt(
-                    priceEach
-                  )}</td>
-                  <td style=\"border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;\">${fmt(
-                    r.together
-                  )}</td>
-                </tr>`;
-                })
-                .join("")}
-            </tbody>
-          </table>
+  // ⬇⬇⬇ DODANO: uporabi nastavitve iz povzetka (mode + fee) in porazdeli po postavkah
+  const opts  = personOpts[who] || { fee: 1, mode: "eur" };
+  const fee   = Number(opts.fee) || 1;
+  // “redna” pomeni minimum (EUR/G35); sicer “eur” = naš Skupaj
+  const base  = opts.mode === "redna" ? (subTotal / safe(usdPerEur)) : subTotal;
+  const charge = base * fee;                           // koliko želiš zaračunati tej osebi
+  const scale  = subTotal > 0 ? (charge / subTotal) : 1; // faktor za proporcionalno delitev
+  // ⬆⬆⬆ KONEC DODATKA
 
-          <div style="display:flex;justify-content:flex-end;margin-top:8px;">
-            <table style="font-size:12px;min-width:260px;border-collapse:collapse;">
-              <tbody>
-                <tr>
-                  <td style="padding:6px;border-top:1px solid #000;">Skupaj</td>
-                  <td style="padding:6px;border-top:1px solid #000;text-align:right;">${fmt(
-                    subTotal
-                  )} EUR</td>
-                </tr>
-                <tr>
-                  <td style="padding:6px;font-weight:700;border-top:1px solid #000;">Za plačilo</td>
-                  <td style="padding:6px;font-weight:700;border-top:1px solid #000;text-align:right;">${fmt(
-                    subTotal
-                  )} EUR</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+  const invoiceNo = `${invPrefix}${String(nextCounter).padStart(3, "0")}`;
 
-          <div style="margin-top:8px;font-size:11px;color:#555;">Opomba: v ceno je vključena proporcionalna poštnina.</div>
-        `;
+  const section = document.createElement("div");
+  section.style.padding = "24px";
+  section.style.width = "794px";
+  section.style.background = "white";
+  section.style.color = "black";
 
-        if (!first) pdf.addPage();
-        await addPrintableToPdf(pdf, section);
-        first = false;
-        nextCounter += 1;
-      }
-      setInvCounter(nextCounter);
-    }
+  section.innerHTML = `
+    <div style="margin-bottom:16px;">
+      <div style="font-size:18px;font-weight:700;">Račun</div>
+      <div style="font-size:12px;opacity:0.8;">Račun št.: ${esc(invoiceNo)}</div>
+      <div style="font-size:12px;opacity:0.8;">Datum: ${new Date().toLocaleDateString()}</div>
+      <div style="font-size:12px;opacity:0.8;">Kupec: ${esc(who)}</div>
+    </div>
+
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead>
+        <tr>
+          <th style="border-bottom:1px solid #000;text-align:left;padding:6px;">Naziv</th>
+          <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Količina</th>
+          <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Cena (EUR)</th>
+          <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Vrednost (EUR)</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map((r) => {
+          const qty = num(r.qty) || 1;
+          const rowTotal  = r.together * scale;   // porazdeljena vrednost vrstice
+          const priceEach = rowTotal / qty;       // cena/kos
+          return `
+            <tr>
+              <td style="border-bottom:1px solid #e5e5e5;padding:6px;">${esc(r.artikel || "Artikel")}</td>
+              <td style="border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;">${fmt(qty)}</td>
+              <td style="border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;">${fmt(priceEach)}</td>
+              <td style="border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;">${fmt(rowTotal)}</td>
+            </tr>`;
+        }).join("")}
+      </tbody>
+    </table>
+
+    <div style="display:flex;justify-content:flex-end;margin-top:8px;">
+      <table style="font-size:12px;min-width:260px;border-collapse:collapse;">
+        <tbody>
+          <tr>
+            <td style="padding:6px;border-top:1px solid #000;">Skupaj</td>
+            <td style="padding:6px;border-top:1px solid #000;text-align:right;">${fmt(charge)} EUR</td>
+          </tr>
+          <tr>
+            <td style="padding:6px;font-weight:700;border-top:1px solid #000;">Za plačilo</td>
+            <td style="padding:6px;font-weight:700;border-top:1px solid #000;text-align:right;">${fmt(charge)} EUR</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:8px;font-size:11px;color:#555;">Opomba: v ceno je vključena proporcionalna poštnina.</div>
+  `;
+
+  if (!first) pdf.addPage();
+  await addPrintableToPdf(pdf, section);
+  first = false;
+  nextCounter += 1;
+}
+setInvCounter(nextCounter);
 
     pdf.save(`izvoz_${exportMode}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.pdf`);
   };
@@ -627,34 +645,67 @@ export default function RealApp() {
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead className="bg-neutral-100 text-neutral-700">
-                  <tr>
-                    <Th>Kdo</Th>
-                    <Th className="text-right">EUR (Skupaj)</Th>
-                    <Th className="text-right">Minimum</Th>
-                    <Th className="text-right">Prejeto</Th>
-                    <Th className="text-right">Dolžan</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {summaryByPerson.map((r) => (
-                    <tr key={r.who} className="border-b last:border-0">
-                      <Td className="font-medium">{r.who}</Td>
-                      <Td className="text-right tabular-nums">{fmt(r.eur)}</Td>
-                      <Td className="text-right tabular-nums">{fmt(r.minimum)}</Td>
-                      <Td className="text-right">
-                        <input
-                          type="number"
-                          inputMode="decimal"
-                          className="w-28 rounded-xl border px-3 py-2 text-right"
-                          value={receivedMap[r.who] ?? ""}
-                          onChange={(e) => setReceivedMap((m) => ({ ...m, [r.who]: e.target.value }))}
-                          placeholder="EUR"
-                        />
-                      </Td>
-                      <Td className={`text-right tabular-nums ${r.eur - num(receivedMap[r.who]) > 0 ? "text-red-600" : "text-green-700"}`}>{fmt(r.due)}</Td>
-                    </tr>
-                  ))}
-                </tbody>
+  <tr>
+    <Th>Kdo</Th>
+    <Th className="text-right">EUR (Skupaj)</Th>
+    <Th className="text-right">Minimum</Th>
+    <Th className="text-right">Način</Th>
+    <Th className="text-right">Fee ×</Th>
+    <Th className="text-right">Končna</Th>
+    <Th className="text-right">Prejeto</Th>
+    <Th className="text-right">Dolžan</Th>
+    <Th className="text-right">Profit</Th>
+  </tr>
+</thead>
+<tbody>
+  {summaryByPerson.map((r) => {
+    const opts = personOpts[r.who] || { fee: 1, mode: "eur" }; // iz 3a
+    const base = opts.mode === "redna" ? r.minimum : r.eur;     // “redna” = Minimum, sicer Skupaj (EUR)
+    const fee  = Number(opts.fee) || 1;
+    const finalCharge = base * fee;
+    const received = num(receivedMap[r.who]);
+    const due = finalCharge - received;
+    const profit = received - r.minimum;   // profit glede na dejansko prejeto
+
+    return (
+      <tr key={r.who} className="border-b last:border-0">
+        <Td className="font-medium">{r.who}</Td>
+        <Td className="text-right tabular-nums">{fmt(r.eur)}</Td>
+        <Td className="text-right tabular-nums">{fmt(r.minimum)}</Td>
+        <Td className="text-right">
+          <select
+            className="w-28 rounded-xl border px-2 py-1"
+            value={opts.mode || "eur"}
+            onChange={(e)=> setPersonOpts(m => ({...m, [r.who]: {...(m[r.who]||{fee:1}), mode: e.target.value}}))}
+          >
+            <option value="eur">Skupaj</option>
+            <option value="redna">Redna</option>
+          </select>
+        </Td>
+        <Td className="text-right">
+          <input
+            type="number" step="0.01"
+            className="w-20 rounded-xl border px-2 py-1 text-right"
+            value={opts.fee ?? 1}
+            onChange={(e)=> setPersonOpts(m => ({...m, [r.who]: {...(m[r.who]||{mode:"eur"}), fee: e.target.value}}))}
+          />
+        </Td>
+        <Td className="text-right tabular-nums">{fmt(finalCharge)}</Td>
+        <Td className="text-right">
+          <input
+            type="number" inputMode="decimal"
+            className="w-28 rounded-xl border px-3 py-2 text-right"
+            value={receivedMap[r.who] ?? ""}
+            onChange={(e)=> setReceivedMap(m => ({...m, [r.who]: e.target.value}))}
+            placeholder="EUR"
+          />
+        </Td>
+        <Td className={`text-right tabular-nums ${due > 0 ? "text-red-600" : "text-green-700"}`}>{fmt(due)}</Td>
+        <Td className="text-right tabular-nums">{fmt(profit)}</Td>
+      </tr>
+    );
+  })}
+</tbody>
               </table>
             </div>
           </div>
@@ -937,25 +988,26 @@ function esc(s) {
 }
 
 function computeRows({ items, myRatio, shippingCNY, origRatio }) {
-  // skupna teža je vsota VNESENIH tež (že total na vrstico)
+  // wTotal = vsota vnesenih (že total) tež na vrstico
   const wTotal = items.reduce((acc, r) => acc + num(r.weight), 0) || 1;
 
   const shippingEUR = shippingCNY ? shippingCNY / safe(myRatio) : 0;
   const usdPerEur   = safe(origRatio) / safe(myRatio);
 
   return items.map((r) => {
-    const unitCNY    = num(r.cny);                 // cena za 1 kos
+    const unitCNY    = num(r.cny);                          // cena za 1 kos
     const qty        = Math.max(1, Math.floor(num(r.qty) || 1)); // default 1
-    const weightTot  = num(r.weight);              // že total teža vrstice (NE množimo z qty)
-    const cnyTotal   = unitCNY * qty;              // skupni CNY za vrstico
+    const weightTot  = num(r.weight);                       // že total teža vrstice (NE množimo z qty)
+    const cnyTotal   = unitCNY * qty;                       // skupni CNY za vrstico
 
-    const eur        = cnyTotal / safe(myRatio);   // pretvorba tvojemu tečaju
-    const shipPart   = (weightTot / wTotal) * shippingEUR; // poštnina po teži
-    const together   = eur + shipPart;             // skupaj EUR (na vrstico)
-    const regular    = together / safe(usdPerEur); // informativno
+    const eur        = cnyTotal / safe(myRatio);            // pretvorba po tvojem tečaju
+    const shipPart   = (weightTot / wTotal) * shippingEUR;  // poštnina po teži (proporcionalno)
+    const together   = eur + shipPart;                      // skupaj EUR
+    const regular    = together / safe(usdPerEur);          // informativno
     const profit     = together - regular;
     const weightPct  = (weightTot / wTotal) * 100;
 
-    return { ...r, qty, eur, shipPart, together, regular, profit, weightPct };
+    return { ...r, qty, eur, shipPart, together, regular, profit, weightPct, weightTotal: weightTot, cnyTotal };
   });
 }
+
