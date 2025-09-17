@@ -241,69 +241,62 @@ const totalWeight = useMemo(
   const [exportSelection, setExportSelection] = useState({ all: true, who: [] });
   const printRef = useRef(null);
 
-  const handleExportPDF = async () => {
-    const { jsPDF } = await import("jspdf");
-    const html2canvas = (await import("html2canvas")).default;
+  // REPLACE od tu ...
+const handleExportPDF = async () => {
+  const { jsPDF } = await import("jspdf");
+  const html2canvas = (await import("html2canvas")).default;
 
-    const selectedWho = exportSelection.all
-      ? people.filter(Boolean)
-      : exportSelection.who;
-    if (!selectedWho.length) return alert("Izberi vsaj eno osebo ali ALL");
+  const selectedWho = exportSelection.all ? people.filter(Boolean) : exportSelection.who;
+  if (!selectedWho.length) {
+    alert("Izberi vsaj eno osebo ali ALL");
+    return;
+  }
 
-    async function addPrintableToPdf(pdf, node) {
-      document.body.appendChild(node);
-      const canvas = await html2canvas(node, { scale: 2 });
-      document.body.removeChild(node);
+  async function addPrintableToPdf(pdf, node) {
+    document.body.appendChild(node);
+    const canvas = await html2canvas(node, { scale: 2 });
+    document.body.removeChild(node);
 
-      const imgData = canvas.toDataURL("image/png");
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const imgWidth = pageWidth;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+    const imgData = canvas.toDataURL("image/png");
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const imgWidth = pageWidth;
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-      if (imgHeight <= pageHeight) {
-        pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
-      } else {
-        let remainingHeight = imgHeight;
-        const pageCanvas = document.createElement("canvas");
-        const pageCtx = pageCanvas.getContext("2d");
-        const pxPageHeight = Math.floor((canvas.width * pageHeight) / pageWidth);
-        pageCanvas.width = canvas.width;
-        pageCanvas.height = pxPageHeight;
-        let sY = 0;
-        while (remainingHeight > 0) {
-          pageCtx.clearRect(0, 0, pageCanvas.width, pageCanvas.height);
-          pageCtx.drawImage(
-            canvas,
-            0,
-            sY,
-            canvas.width,
-            pxPageHeight,
-            0,
-            0,
-            pageCanvas.width,
-            pageCanvas.height
-          );
-          const pageData = pageCanvas.toDataURL("image/png");
-          if (pdf.getNumberOfPages() > 0) pdf.addPage();
-          pdf.addImage(pageData, "PNG", 0, 0, pageWidth, pageHeight);
-          remainingHeight -= pageHeight;
-          sY += pxPageHeight;
-        }
+    if (imgHeight <= pageHeight) {
+      pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
+    } else {
+      let remainingHeight = imgHeight;
+      const pageCanvas = document.createElement("canvas");
+      const pageCtx = pageCanvas.getContext("2d");
+      const pxPageHeight = Math.floor((canvas.width * pageHeight) / pageWidth);
+      pageCanvas.width = canvas.width;
+      pageCanvas.height = pxPageHeight;
+      let sY = 0;
+      while (remainingHeight > 0) {
+        pageCtx.clearRect(0, 0, pageCanvas.width, pageCanvas.height);
+        pageCtx.drawImage(canvas, 0, sY, canvas.width, pxPageHeight, 0, 0, pageCanvas.width, pageCanvas.height);
+        const pageData = pageCanvas.toDataURL("image/png");
+        if (pdf.getNumberOfPages() > 0) pdf.addPage();
+        pdf.addImage(pageData, "PNG", 0, 0, pageWidth, pageHeight);
+        remainingHeight -= pageHeight;
+        sY += pxPageHeight;
       }
     }
+  }
 
-    const pdf = new jsPDF({ orientation: "p", unit: "pt", format: "a4" });
+  const pdf = new jsPDF({ orientation: "p", unit: "pt", format: "a4" });
 
-    if (exportMode === "interno") {
-      const printable = document.createElement("div");
-      printable.style.padding = "24px";
-      printable.style.width = "794px";
-      printable.style.background = "white";
-      printable.style.color = "black";
+  if (exportMode === "interno") {
+    const printable = document.createElement("div");
+    printable.style.padding = "24px";
+    printable.style.width = "794px";
+    printable.style.background = "white";
+    printable.style.color = "black";
 
-      const header = document.createElement("div");
-      header.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+    const header = document.createElement("div");
+    header.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div>
           <div style="font-size:20px;font-weight:700;">Povzetek (interno)</div>
           <div style="font-size:12px;opacity:0.8;">Ustvarjeno: ${new Date().toLocaleString()}</div>
@@ -313,183 +306,156 @@ const totalWeight = useMemo(
           <div><b>Poštnina:</b> ${fmt(shippingCNY)} CNY = ${fmt(shippingEUR)} EUR</div>
         </div>
       </div>`;
-      printable.appendChild(header);
+    printable.appendChild(header);
 
-      for (const who of selectedWho) {
-        const rows = computedRows.filter((r) => r.who?.trim() === who);
-        const subTotal = rows.reduce((a, r) => a + r.together, 0);
-        const received = num(receivedMap[who]);
-        const due = subTotal - received;
+    for (const who of selectedWho) {
+      const rows = computedRows.filter((r) => (r.who || "").trim() === who);
+      const subTotal = rows.reduce((a, r) => a + r.together, 0);
+      const received = num(receivedMap[who]);
+      const due = subTotal - received;
 
-        const section = document.createElement("div");
-        section.style.marginBottom = "24px";
-        section.innerHTML = `
-          <div style="font-weight:700;font-size:16px;margin:8px 0 4px;">${esc(who)}</div>
-          <table style="width:100%;border-collapse:collapse;font-size:12px;">
-            <thead>
-              <tr>
-                <th style="border-bottom:1px solid #ddd;text-align:left;padding:6px;">Artikel</th>
-                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Količina</th>
-                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">CNY</th>
-                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">EUR</th>
-                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Teža (g)</th>
-                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Poštnina EUR</th>
-                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Skupaj EUR</th>
-                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Redna</th>
-                <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Profit</th>
-              </tr>
-            </thead>
+      const section = document.createElement("div");
+      section.style.marginBottom = "24px";
+
+      const tbody = rows.map((r) => `
+        <tr>
+          <td style="border-bottom:1px solid #f0f0f0;padding:6px;">${esc(r.artikel)}</td>
+          <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.qty)}</td>
+          <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.cnyTotal)}</td>
+          <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.eur)}</td>
+          <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.weightTotal)}</td>
+          <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.shipPart)}</td>
+          <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.together)}</td>
+          <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.regular)}</td>
+          <td style="border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;">${fmt(r.profit)}</td>
+        </tr>
+      `).join("");
+
+      section.innerHTML = `
+        <div style="font-weight:700;font-size:16px;margin:8px 0 4px;">${esc(who)}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr>
+              <th style="border-bottom:1px solid #ddd;text-align:left;padding:6px;">Artikel</th>
+              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Količina</th>
+              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">CNY (skupaj)</th>
+              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">EUR</th>
+              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Teža (g)</th>
+              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Poštnina EUR</th>
+              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Skupaj EUR</th>
+              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Redna</th>
+              <th style="border-bottom:1px solid #ddd;text-align:right;padding:6px;">Profit</th>
+            </tr>
+          </thead>
+          <tbody>${tbody}</tbody>
+        </table>
+        <div style="display:flex;justify-content:flex-end;gap:16px;margin-top:8px;font-size:12px;">
+          <div><b>Prejeto:</b> ${fmt(received)} EUR</div>
+          <div><b>Skupaj:</b> ${fmt(subTotal)} EUR</div>
+          <div><b>Dolg:</b> ${fmt(due)} EUR</div>
+        </div>
+      `;
+      printable.appendChild(section);
+    }
+
+    const footer = document.createElement("div");
+    footer.style.fontSize = "12px";
+    footer.style.marginTop = "8px";
+    footer.innerHTML = `
+      <div style="display:flex;justify-content:space-between;border-top:1px solid #eee;padding-top:8px;">
+        <div>
+          <div><b>Skupna teža:</b> ${fmt(totalWeight)} g</div>
+          <div><b>Skupaj CNY:</b> ${fmt(totalCNY)}</div>
+        </div>
+        <div style="text-align:right;">
+          <div><b>Skupaj EUR (artikli+poštnina):</b> ${fmt(grandTogether)} EUR</div>
+          <div><b>"Zaslužek" (tečajna razlika):</b> ${fmt(rateProfit)}</div>
+        </div>
+      </div>`;
+    printable.appendChild(footer);
+
+    await addPrintableToPdf(pdf, printable);
+  } else {
+    let first = true;
+    let nextCounter = invCounter;
+
+    for (const who of selectedWho) {
+      const rows = computedRows.filter((r) => (r.who || "").trim() === who);
+      const subTotal = rows.reduce((a, r) => a + r.together, 0);
+
+      const opts = personOpts[who] || { fee: 1, mode: "eur" };
+      const fee = Number(opts.fee) || 1;
+      const base = opts.mode === "redna" ? (subTotal / safe(usdPerEur)) : subTotal;
+      const charge = base * fee;
+      const scale = subTotal > 0 ? (charge / subTotal) : 1;
+
+      const invoiceNo = `${invPrefix}${String(nextCounter).padStart(3, "0")}`;
+
+      const section = document.createElement("div");
+      section.style.padding = "24px";
+      section.style.width = "794px";
+      section.style.background = "white";
+      section.style.color = "black";
+
+      const tbody = rows.map((r) => {
+        const qty = num(r.qty) || 1;
+        const rowTotal = r.together * scale;
+        const priceEach = rowTotal / qty;
+        return `
+          <tr>
+            <td style="border-bottom:1px solid #e5e5e5;padding:6px;">${esc(r.artikel || "Artikel")}</td>
+            <td style="border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;">${fmt(qty)}</td>
+            <td style="border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;">${fmt(priceEach)}</td>
+            <td style="border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;">${fmt(rowTotal)}</td>
+          </tr>`;
+      }).join("");
+
+      section.innerHTML = `
+        <div style="margin-bottom:16px;">
+          <div style="font-size:18px;font-weight:700;">Račun</div>
+          <div style="font-size:12px;opacity:0.8;">Račun št.: ${esc(invoiceNo)}</div>
+          <div style="font-size:12px;opacity:0.8;">Datum: ${new Date().toLocaleDateString()}</div>
+          <div style="font-size:12px;opacity:0.8;">Kupec: ${esc(who)}</div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr>
+              <th style="border-bottom:1px solid #000;text-align:left;padding:6px;">Naziv</th>
+              <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Količina</th>
+              <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Cena (EUR)</th>
+              <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Vrednost (EUR)</th>
+            </tr>
+          </thead>
+          <tbody>${tbody}</tbody>
+        </table>
+        <div style="display:flex;justify-content:flex-end;margin-top:8px;">
+          <table style="font-size:12px;min-width:260px;border-collapse:collapse;">
             <tbody>
-              ${rows
-                .map(
-                  (r) => `
-                <tr>
-                  <td style=\"border-bottom:1px solid #f0f0f0;padding:6px;\">${esc(
-                    r.artikel
-                  )}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
-                    r.qty
-                  )}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
-                    r.cny
-                  )}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
-                    r.eur
-                  )}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
-                    r.weightTotal
-                  )}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
-                    r.shipPart
-                  )}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
-                    r.together
-                  )}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
-                    r.regular
-                  )}</td>
-                  <td style=\"border-bottom:1px solid #f0f0f0;text-align:right;padding:6px;\">${fmt(
-                    r.profit
-                  )}</td>
-                </tr>`
-                )
-                .join("")}
+              <tr>
+                <td style="padding:6px;border-top:1px solid #000;">Skupaj</td>
+                <td style="padding:6px;border-top:1px solid #000;text-align:right;">${fmt(charge)} EUR</td>
+              </tr>
+              <tr>
+                <td style="padding:6px;font-weight:700;border-top:1px solid #000;">Za plačilo</td>
+                <td style="padding:6px;font-weight:700;border-top:1px solid #000;text-align:right;">${fmt(charge)} EUR</td>
+              </tr>
             </tbody>
           </table>
-          <div style="display:flex;justify-content:flex-end;gap:16px;margin-top:8px;font-size:12px;">
-            <div><b>Prejeto:</b> ${fmt(received)} EUR</div>
-            <div><b>Skupaj:</b> ${fmt(subTotal)} EUR</div>
-            <div><b>Dolg:</b> ${fmt(due)} EUR</div>
-          </div>
-        `;
-        printable.appendChild(section);
-      }
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:#555;">Opomba: v ceno je vključena proporcionalna poštnina.</div>
+      `;
 
-      const footer = document.createElement("div");
-      footer.style.fontSize = "12px";
-      footer.style.marginTop = "8px";
-      footer.innerHTML = `
-        <div style="display:flex;justify-content:space-between;border-top:1px solid #eee;padding-top:8px;">
-          <div>
-            <div><b>Skupna teža:</b> ${fmt(totalWeight)} g</div>
-            <div><b>Skupaj CNY:</b> ${fmt(totalCNY)}</div>
-          </div>
-          <div style="text-align:right;">
-            <div><b>Skupaj EUR (artikli+poštnina):</b> ${fmt(grandTogether)} EUR</div>
-            <div><b>"Zaslužek" (tečajna razlika):</b> ${fmt(rateProfit)}</div>
-          </div>
-        </div>`;
-      printable.appendChild(footer);
+      if (!first) pdf.addPage();
+      await addPrintableToPdf(pdf, section);
+      first = false;
+      nextCounter += 1;
+    }
 
-      await addPrintableToPdf(pdf, printable);
-    } else {
-    // ========== CLIENT PDF (Za stranko) ==========
-let first = true;
-let nextCounter = invCounter;
+    setInvCounter(nextCounter);
+  }
 
-for (const who of selectedWho) {
-  const rows = computedRows.filter((r) => r.who?.trim() === who);
-
-  // izračun trenutnega "Skupaj" po interni logiki
-  const subTotal = rows.reduce((a, r) => a + r.together, 0);
-
-  // ⬇⬇⬇ DODANO: uporabi nastavitve iz povzetka (mode + fee) in porazdeli po postavkah
-  const opts  = personOpts[who] || { fee: 1, mode: "eur" };
-  const fee   = Number(opts.fee) || 1;
-  // “redna” pomeni minimum (EUR/G35); sicer “eur” = naš Skupaj
-  const base  = opts.mode === "redna" ? (subTotal / safe(usdPerEur)) : subTotal;
-  const charge = base * fee;                           // koliko želiš zaračunati tej osebi
-  const scale  = subTotal > 0 ? (charge / subTotal) : 1; // faktor za proporcionalno delitev
-  // ⬆⬆⬆ KONEC DODATKA
-
-  const invoiceNo = `${invPrefix}${String(nextCounter).padStart(3, "0")}`;
-
-  const section = document.createElement("div");
-  section.style.padding = "24px";
-  section.style.width = "794px";
-  section.style.background = "white";
-  section.style.color = "black";
-
-  section.innerHTML = `
-    <div style="margin-bottom:16px;">
-      <div style="font-size:18px;font-weight:700;">Račun</div>
-      <div style="font-size:12px;opacity:0.8;">Račun št.: ${esc(invoiceNo)}</div>
-      <div style="font-size:12px;opacity:0.8;">Datum: ${new Date().toLocaleDateString()}</div>
-      <div style="font-size:12px;opacity:0.8;">Kupec: ${esc(who)}</div>
-    </div>
-
-    <table style="width:100%;border-collapse:collapse;font-size:12px;">
-      <thead>
-        <tr>
-          <th style="border-bottom:1px solid #000;text-align:left;padding:6px;">Naziv</th>
-          <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Količina</th>
-          <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Cena (EUR)</th>
-          <th style="border-bottom:1px solid #000;text-align:right;padding:6px;">Vrednost (EUR)</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rows.map((r) => {
-          const qty = num(r.qty) || 1;
-          const rowTotal  = r.together * scale;   // porazdeljena vrednost vrstice
-          const priceEach = rowTotal / qty;       // cena/kos
-          return `
-            <tr>
-              <td style="border-bottom:1px solid #e5e5e5;padding:6px;">${esc(r.artikel || "Artikel")}</td>
-              <td style="border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;">${fmt(qty)}</td>
-              <td style="border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;">${fmt(priceEach)}</td>
-              <td style="border-bottom:1px solid #e5e5e5;text-align:right;padding:6px;">${fmt(rowTotal)}</td>
-            </tr>`;
-        }).join("")}
-      </tbody>
-    </table>
-
-    <div style="display:flex;justify-content:flex-end;margin-top:8px;">
-      <table style="font-size:12px;min-width:260px;border-collapse:collapse;">
-        <tbody>
-          <tr>
-            <td style="padding:6px;border-top:1px solid #000;">Skupaj</td>
-            <td style="padding:6px;border-top:1px solid #000;text-align:right;">${fmt(charge)} EUR</td>
-          </tr>
-          <tr>
-            <td style="padding:6px;font-weight:700;border-top:1px solid #000;">Za plačilo</td>
-            <td style="padding:6px;font-weight:700;border-top:1px solid #000;text-align:right;">${fmt(charge)} EUR</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div style="margin-top:8px;font-size:11px;color:#555;">Opomba: v ceno je vključena proporcionalna poštnina.</div>
-  `;
-
-  if (!first) pdf.addPage();
-  await addPrintableToPdf(pdf, section);
-  first = false;
-  nextCounter += 1;
-}
-setInvCounter(nextCounter);
-
-    pdf.save(`izvoz_${exportMode}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.pdf`);
-  };
+  pdf.save(`izvoz_${exportMode}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.pdf`);
+};
 
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900">
