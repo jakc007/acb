@@ -18,7 +18,7 @@ export default function RealApp() {
     return saved
       ? JSON.parse(saved)
       : [
-          { id: uid(), artikel: "", cny: "", weight: "", qty: 1, who: "" },
+          { id: uid(), artikel: "", cny: "", qty: 1, weight: "", who: "" },
         ];
   });
 
@@ -139,11 +139,7 @@ export default function RealApp() {
   );
 
   // === UI helpers ===
-  const addRow = () =>
-    setItems((s) => [
-      ...s,
-      { id: uid(), artikel: "", cny: "", weight: "", qty: 1, who: people[0] || "" },
-    ]);
+  const addRow = () => setItems((s) => [...s, { id: uid(), artikel: "", cny: "", qty: 1, weight: "", who: people[0] || "" }]);
   const delRow = (id) => setItems((s) => s.filter((r) => r.id !== id));
   const updateRow = (id, k, v) =>
     setItems((s) => s.map((r) => (r.id === id ? { ...r, [k]: v } : r)));
@@ -941,19 +937,25 @@ function esc(s) {
 }
 
 function computeRows({ items, myRatio, shippingCNY, origRatio }) {
-  const wTotal = sum(items.map((r) => (num(r.weight) * (num(r.qty) || 1)))) || 1;
+  // skupna teža je vsota VNESENIH tež (že total na vrstico)
+  const wTotal = items.reduce((acc, r) => acc + num(r.weight), 0) || 1;
+
   const shippingEUR = shippingCNY ? shippingCNY / safe(myRatio) : 0;
-  const usdPerEur = safe(origRatio) / safe(myRatio);
+  const usdPerEur   = safe(origRatio) / safe(myRatio);
+
   return items.map((r) => {
-    const qty = num(r.qty) || 1;
-    const cnyTotal = num(r.cny) * qty;
-    const weightTotal = num(r.weight) * qty;
-    const eur = cnyTotal / safe(myRatio);
-    const shipPart = (weightTotal / wTotal) * shippingEUR;
-    const together = eur + shipPart;
-    const regular = together / safe(usdPerEur);
-    const profit = together - regular;
-    const weightPct = wTotal ? (weightTotal / wTotal) * 100 : 0;
-    return { ...r, qty, cny: cnyTotal, weightTotal, eur, shipPart, together, regular, profit, weightPct };
+    const unitCNY    = num(r.cny);                 // cena za 1 kos
+    const qty        = Math.max(1, Math.floor(num(r.qty) || 1)); // default 1
+    const weightTot  = num(r.weight);              // že total teža vrstice (NE množimo z qty)
+    const cnyTotal   = unitCNY * qty;              // skupni CNY za vrstico
+
+    const eur        = cnyTotal / safe(myRatio);   // pretvorba tvojemu tečaju
+    const shipPart   = (weightTot / wTotal) * shippingEUR; // poštnina po teži
+    const together   = eur + shipPart;             // skupaj EUR (na vrstico)
+    const regular    = together / safe(usdPerEur); // informativno
+    const profit     = together - regular;
+    const weightPct  = (weightTot / wTotal) * 100;
+
+    return { ...r, qty, eur, shipPart, together, regular, profit, weightPct };
   });
 }
