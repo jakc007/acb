@@ -523,17 +523,18 @@ const handleExportPDF = async () => {
              <thead className="bg-neutral-100 text-neutral-700">
                 <tr>
                   <Th className="w-[320px]">Artikel</Th>
-                  <Th className="w-20 text-right">Količina</Th>
-                  <Th className="w-24 text-right">CNY</Th>
-                  <Th className="w-24 text-right">EUR</Th>
-                  <Th className="w-24 text-right">Teža (g)</Th>
-                  <Th className="w-20 text-right">Teža (%)</Th>
-                  <Th className="w-28 text-right">Poštnina EUR</Th>
-                  <Th className="w-28 text-right">Skupaj EUR</Th>
-                  <Th className="w-24 text-right">Redna</Th>
-                  <Th className="w-20 text-right">Profit</Th>
-                  <Th className="w-28">Kdo</Th>
-                  <Th className="w-10"></Th>
+<Th className="w-20 text-right">Količina</Th>
+<Th className="w-24 text-right">CNY</Th>
+<Th className="w-24 text-right">EUR</Th>
+<Th className="w-24 text-right">Teža (g)</Th>
+<Th className="w-20 text-right">Teža (%)</Th>
+<Th className="w-28 text-right">Poštnina EUR</Th>
+<Th className="w-28 text-right">Skupaj EUR</Th>
+<Th className="w-24 text-right">Redna</Th>
+<Th className="w-20 text-right">Profit</Th>
+<Th className="w-28">Kdo</Th>
+<Th className="w-10"></Th>
+
                 </tr>
               </thead>
               <tbody>
