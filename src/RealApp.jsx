@@ -520,53 +520,73 @@ const handleExportPDF = async () => {
         <section className="mt-6 rounded-2xl bg-white shadow overflow-hidden">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="bg-neutral-100 text-neutral-700">
+             <thead className="bg-neutral-100 text-neutral-700">
                 <tr>
-                  <Th>Artikel</Th>
-                  <Th className="text-right">Količina</Th>
-                  <Th className="text-right">CNY</Th>
-                  <Th className="text-right">EUR</Th>
-                  <Th className="text-right">Teža (g)</Th>
-                  <Th className="text-right">Teža (%)</Th>
-                  <Th className="text-right">Poštnina EUR</Th>
-                  <Th className="text-right">Skupaj EUR</Th>
-                  <Th className="text-right">Redna</Th>
-                  <Th className="text-right">Profit</Th>
-                  <Th>Kdo</Th>
-                  <Th></Th>
+                  <Th className="w-[320px]">Artikel</Th>
+                  <Th className="w-20 text-right">Količina</Th>
+                  <Th className="w-24 text-right">CNY</Th>
+                  <Th className="w-24 text-right">EUR</Th>
+                  <Th className="w-24 text-right">Teža (g)</Th>
+                  <Th className="w-20 text-right">Teža (%)</Th>
+                  <Th className="w-28 text-right">Poštnina EUR</Th>
+                  <Th className="w-28 text-right">Skupaj EUR</Th>
+                  <Th className="w-24 text-right">Redna</Th>
+                  <Th className="w-20 text-right">Profit</Th>
+                  <Th className="w-28">Kdo</Th>
+                  <Th className="w-10"></Th>
                 </tr>
               </thead>
               <tbody>
                 {computedRows.map((r) => (
                   <tr key={r.id} className="border-b last:border-0">
                     <Td>
-                      <input className="w-full rounded-xl border px-3 py-2" value={r.artikel} onChange={(e) => updateRow(r.id, "artikel", e.target.value)} placeholder="npr. pulover" />
-                    </Td>
-                    <Td className="text-right">
-                      <input type="number" min="1" step="1" className="w-24 rounded-xl border px-3 py-2 text-right" value={r.qty} onChange={(e) => updateRow(r.id, "qty", e.target.value)} />
-                    </Td>
-                    <Td className="text-right">
-                      <input type="number" inputMode="decimal" className="w-28 rounded-xl border px-3 py-2 text-right" value={r.cny} onChange={(e) => updateRow(r.id, "cny", e.target.value)} placeholder="CNY" />
-                    </Td>
-                    <Td className="text-right tabular-nums">{fmt(r.eur)}</Td>
-                    <Td className="text-right">
-                      <input type="number" inputMode="decimal" className="w-28 rounded-xl border px-3 py-2 text-right" value={r.weight} onChange={(e) => updateRow(r.id, "weight", e.target.value)} placeholder="g" />
-                    </Td>
-                    <Td className="text-right tabular-nums">{fmt(r.weightPct)}%</Td>
-                    <Td className="text-right tabular-nums">{fmt(r.shipPart)}</Td>
-                    <Td className="text-right font-medium tabular-nums">{fmt(r.together)}</Td>
-                    <Td className="text-right tabular-nums">{fmt(r.regular)}</Td>
-                    <Td className="text-right tabular-nums">{fmt(r.profit)}</Td>
-                    <Td>
-                      <select className="w-36 rounded-xl border px-3 py-2" value={r.who || ""} onChange={(e) => updateRow(r.id, "who", e.target.value)}>
-                        <option value="">—</option>
-                        {people.filter(Boolean).map((p) => (
-                          <option key={p} value={p}>
-                            {p}
-                          </option>
-                        ))}
-                      </select>
-                    </Td>
+  <input
+    className="w-full min-w-[320px] rounded-xl border px-3 py-2"
+    value={r.artikel}
+    onChange={(e)=> updateRow(r.id, "artikel", e.target.value)}
+    placeholder="npr. pulover"
+  />
+</Td>
+
+<Td className="text-right">
+  <input
+    type="number" min="1" step="1"
+    className="w-16 rounded-xl border px-3 py-2 text-right"
+    value={r.qty}
+    onChange={(e)=> updateRow(r.id, "qty", e.target.value)}
+  />
+</Td>
+
+<Td className="text-right">
+  <input
+    type="number" inputMode="decimal"
+    className="w-20 rounded-xl border px-3 py-2 text-right"
+    value={r.cny}
+    onChange={(e)=> updateRow(r.id, "cny", e.target.value)}
+    placeholder="CNY"
+  />
+</Td>
+
+<Td className="text-right">
+  <input
+    type="number" inputMode="decimal"
+    className="w-20 rounded-xl border px-3 py-2 text-right"
+    value={r.weight}
+    onChange={(e)=> updateRow(r.id, "weight", e.target.value)}
+    placeholder="g"
+  />
+</Td>
+
+<Td>
+  <select
+    className="w-28 rounded-xl border px-3 py-2"
+    value={r.who || ""}
+    onChange={(e)=> updateRow(r.id, "who", e.target.value)}
+  >
+    <option value="">—</option>
+    {people.filter(Boolean).map((p)=> <option key={p} value={p}>{p}</option>)}
+  </select>
+</Td>
                     <Td className="text-right">
                       <button onClick={() => delRow(r.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-xl">
                         <Trash2 className="h-4 w-4" />
