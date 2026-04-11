@@ -66,18 +66,40 @@ export default function RealApp() {
   useEffect(() => { localStorage.setItem("RACUN_INV_PREFIX", invPrefix); }, [invPrefix]);
   useEffect(() => { localStorage.setItem("RACUN_INV_COUNTER", String(invCounter)); }, [invCounter]);
 
-  // Clerk cloud load
+  // === Clerk cloud load (ob prijavi) - POPRAVLJENO ===
   useEffect(() => {
     if (!isLoaded || !isSignedIn) return;
-    const cloudPkgs = user?.unsafeMetadata?.packages;
-    if (Array.isArray(cloudPkgs)) setPackages(cloudPkgs);
+    
+    // Naložimo nastavitve za račune
     const invCloud = user?.unsafeMetadata?.invoice;
     if (invCloud && typeof invCloud === "object") {
       if (typeof invCloud.prefix === "string") setInvPrefix(invCloud.prefix);
       if (Number.isFinite(invCloud.counter)) setInvCounter(Number(invCloud.counter));
     }
+
+    // Naložimo in pametno ZDRUŽIMO pakete iz oblaka in lokalnega pomnilnika
+    const cloudPkgs = user?.unsafeMetadata?.packages;
+    
+    setPackages((prevLocal) => {
+      if (!Array.isArray(cloudPkgs)) return prevLocal;
+      
+      // Združimo pakete po ID-ju, tako da oblak ne povozi novih lokalnih paketov
+      const map = new Map();
+      [...cloudPkgs, ...prevLocal].forEach(p => {
+        if (!map.has(p.id)) map.set(p.id, p);
+      });
+      
+      // Sortiramo po datumu (novejši zgoraj)
+      const merged = Array.from(map.values()).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      
+      // Posodobimo še localStorage, da sta usklajena
+      localStorage.setItem("RACUN_PACKAGES", JSON.stringify(merged));
+      return merged;
+    });
+
   }, [isLoaded, isSignedIn, user]);
 
+  // === Cloud autosave za invoice settings (debounce) - OSTANE ISTO ===
   useEffect(() => {
     if (!isSignedIn) return;
     const t = setTimeout(() => {
@@ -194,13 +216,26 @@ export default function RealApp() {
       id: uid(), name, createdAt: new Date().toISOString(), items, people, origRatio, myRatio, shippingCNY,
       derived: { totalWeight, totalCNY, shippingEUR, usdPerEur, rateProfit, grandTogether, summaryByPerson },
     };
+    
     const next = [payload, ...packages];
+    
+    // 1. Shrani lokalno takoj (da so podatki varni na računalniku)
     setPackages(next);
     localStorage.setItem("RACUN_PACKAGES", JSON.stringify(next));
     setPkgName("");
     setShowHistory(true);
+
+    // 2. Shrani v oblak
     if (isSignedIn) {
-      try { await user.update({ unsafeMetadata: { ...(user.unsafeMetadata || {}), packages: next } }); } catch (e) {}
+      try { 
+        await user.update({ 
+          unsafeMetadata: { ...(user.unsafeMetadata || {}), packages: next } 
+        }); 
+      } catch (e) {
+        console.error("Napaka pri shranjevanju v Clerk oblak:", e);
+        // Tukaj ti bo sedaj aplikacija povedala, če si presegel tistih 8 KB!
+        alert("Paket je bil shranjen lokalno na ta računalnik, vendar shranjevanje v oblak (Clerk) ni uspelo. Morda je v oblaku zmanjkalo prostora (omejitev 8 KB).");
+      }
     }
   };
 
