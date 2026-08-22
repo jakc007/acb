@@ -6,10 +6,16 @@ import './index.css'
 
 const pk = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 
+const application = pk ? (
+  <ClerkProvider publishableKey={pk}>
+    <App />
+  </ClerkProvider>
+) : (
+  <App authEnabled={false} />
+)
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <ClerkProvider publishableKey={pk}>
-      <App />
-    </ClerkProvider>
+    {application}
   </React.StrictMode>,
 )
