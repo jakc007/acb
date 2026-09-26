@@ -2,6 +2,41 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { calculatePackage, computeRows, formatNumber, hydratePackage } from "../src/lib/calculations.js";
 
+test("actual profit is received minus acquisition cost, not overpayment", () => {
+  const result = calculatePackage({
+    items: [{ cny: 180, qty: 1, weight: 100, who: "Jakob" }], people: ["Jakob"],
+    origRatio: 1, myRatio: 0.9, shippingCNY: 0, receivedMap: { Jakob: 220 },
+  });
+  const person = result.summaryByPerson[0];
+  assert.equal(person.cost, 180);
+  assert.equal(person.charge, 200);
+  assert.equal(person.profitReceived, 40);
+  assert.equal(person.profitPlanned, 20);
+  assert.equal(person.due, -20);
+  assert.equal(result.totalProfitReceived, 40);
+});
+
+test("total profit includes shipping and unassigned costs, including zero weight", () => {
+  const result = calculatePackage({
+    items: [{ cny: 180, qty: 1, weight: 0, who: "Jakob" }, { cny: 20, qty: 1, weight: 0, who: "" }],
+    people: ["Jakob"], origRatio: 1, myRatio: 0.9, shippingCNY: 10, receivedMap: { Jakob: 220 },
+  });
+  assert.equal(result.totalCost, 210);
+  assert.equal(result.totalProfitReceived, 10);
+});
+
+test("partial payments and multiple recipients show actual losses and profits", () => {
+  const result = calculatePackage({
+    items: [{ cny: 100, qty: 1, weight: 1, who: "A" }, { cny: 100, qty: 1, weight: 3, who: "B" }],
+    people: ["A", "B"], origRatio: 1, myRatio: 1, shippingCNY: 40,
+    receivedMap: { A: 50, B: 150 }, personOpts: { B: { mode: "redna", fee: 1.2 } },
+  });
+  assert.equal(result.summaryByPerson[0].profitReceived, -60);
+  assert.equal(result.summaryByPerson[1].profitReceived, 20);
+  assert.equal(result.totalProfitReceived, -40);
+  assert.equal(result.summaryByPerson[1].profitPlanned, 26);
+});
+
 test("formatting supports zero decimal places", () => {
   assert.equal(formatNumber(12.6, 0), "13");
 });
