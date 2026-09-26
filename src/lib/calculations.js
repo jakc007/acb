@@ -77,7 +77,7 @@ export function calculatePackage({
   const usdPerEur = safeDivisor(origRatio) / safeDivisor(myRatio);
   const rateProfit = totalCNY / safeDivisor(myRatio) - totalCNY / safeDivisor(origRatio);
   const grandTogether = sum(rows.map((row) => row.together));
-  const namedPeople = [...new Set(people.map((person) => person.trim()).filter(Boolean))];
+  const namedPeople = [...new Set([...people, ...rows.map((row) => row.who || "")].map((person) => person.trim()).filter(Boolean))];
 
   const summaryByPerson = namedPeople.map((who) => {
     const personRows = rows.filter((row) => (row.who || "").trim() === who);
@@ -92,6 +92,7 @@ export function calculatePackage({
       who,
       eur,
       minimum,
+      cost: minimum,
       charge,
       received,
       due: charge - received,
@@ -100,8 +101,16 @@ export function calculatePackage({
     };
   });
 
+  const totalCost = (totalCNY + Math.max(0, toNumber(shippingCNY))) / safeDivisor(origRatio);
+  const totalReceived = sum(summaryByPerson.map((person) => person.received));
+  const totalCharge = sum(summaryByPerson.map((person) => person.charge));
   return {
     rows,
+    totalCost,
+    totalReceived,
+    totalCharge,
+    totalProfitReceived: totalReceived - totalCost,
+    totalProfitPlanned: totalCharge - totalCost,
     totalWeight,
     totalCNY,
     shippingEUR,

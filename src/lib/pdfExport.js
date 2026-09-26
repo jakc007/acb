@@ -80,7 +80,9 @@ async function renderInternalSummary({
 
   selectedPeople.forEach((who) => {
     const rows = computedRows.filter((row) => (row.who || "").trim() === who);
-    const subtotal = rows.reduce((total, row) => total + row.together, 0);
+    const person = metrics.summaryByPerson.find((entry) => entry.who === who);
+    const subtotal = person?.charge ?? rows.reduce((total, row) => total + row.together, 0);
+    const cost = rows.reduce((total, row) => total + row.regular, 0);
     const received = toNumber(receivedMap[who]);
     const section = document.createElement("section");
     section.style.marginBottom = "24px";
@@ -91,15 +93,17 @@ async function renderInternalSummary({
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:10px;border:1px solid #e2e8f0;border-top:0;">
         <thead><tr style="background:#f8fafc;color:#64748b;">
-          ${["Artikel", "Kol.", "CNY", "EUR", "Teža", "Poštnina", "Skupaj", "Redna", "Razlika"].map((label) => `<th style="padding:7px;text-align:${label === "Artikel" ? "left" : "right"};border-bottom:1px solid #e2e8f0;">${label}</th>`).join("")}
+          ${["Artikel", "Kol.", "Teža", "CNY", "EUR", "Poštnina", "Skupaj", "Redna", "Razlika"].map((label) => `<th style="padding:7px;text-align:${label === "Artikel" ? "left" : "right"};border-bottom:1px solid #e2e8f0;">${label}</th>`).join("")}
         </tr></thead>
         <tbody>${rows.map((row) => `
           <tr>
             <td style="padding:7px;border-bottom:1px solid #f1f5f9;">${escapeHtml(row.artikel || "Artikel")}</td>
-            ${[row.qty, row.cnyTotal, row.eur, row.weightTotal, row.shipPart, row.together, row.regular, row.profit].map((value) => `<td style="padding:7px;text-align:right;border-bottom:1px solid #f1f5f9;">${fmt(value)}</td>`).join("")}
+            ${[row.qty, row.weightTotal, row.cnyTotal, row.eur, row.shipPart, row.together, row.regular, row.profit].map((value) => `<td style="padding:7px;text-align:right;border-bottom:1px solid #f1f5f9;">${fmt(value)}</td>`).join("")}
           </tr>`).join("")}</tbody>
       </table>
       <div style="display:flex;justify-content:flex-end;gap:18px;padding:9px 2px 0;font-size:11px;color:#475569;">
+        <span>Nabava <b>${fmt(cost)} €</b></span>
+        <span>Profit <b>${fmt(received - cost)} €</b></span>
         <span>Prejeto <b>${fmt(received)} €</b></span>
         <span>Skupaj <b>${fmt(subtotal)} €</b></span>
         <span>Dolg <b style="color:${subtotal - received > 0 ? "#dc2626" : "#059669"};">${fmt(subtotal - received)} €</b></span>
@@ -113,7 +117,7 @@ async function renderInternalSummary({
       ${metric("Skupna teža", `${fmt(metrics.totalWeight)} g`)}
       ${metric("Vrednost", `${fmt(metrics.totalCNY)} CNY`)}
       ${metric("Skupaj", `${fmt(metrics.grandTogether)} €`)}
-      ${metric("Tečajna razlika", `${fmt(metrics.rateProfit)} €`)}
+      ${metric("Skupen profit paketa", `${fmt(metrics.totalProfitReceived)} €`)}
     </div>`;
   printable.appendChild(footer);
   await addPrintableToPdf(pdf, html2canvas, printable, false);

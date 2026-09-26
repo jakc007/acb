@@ -7,10 +7,21 @@ import {
   migrateLegacyPackages,
   parseBackup,
   removePackage,
+  replacePackages,
   savePackage,
 } from "../src/lib/storage.js";
 
 globalThis.localStorage = createLocalStorage();
+
+test("cloud refresh replaces only the active owner's cached packages including deletions", async () => {
+  await savePackage("replace-a", { id: "old", name: "Old" });
+  await savePackage("replace-b", { id: "private", name: "Private" });
+  await replacePackages("replace-a", [{ id: "new", name: "New" }]);
+  assert.deepEqual((await listPackages("replace-a")).map((pkg) => pkg.id), ["new"]);
+  assert.deepEqual((await listPackages("replace-b")).map((pkg) => pkg.id), ["private"]);
+  await replacePackages("replace-a", []);
+  assert.deepEqual(await listPackages("replace-a"), []);
+});
 
 const basePackage = {
   id: "package-1",

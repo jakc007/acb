@@ -1,4 +1,4 @@
-import { SignedIn, SignedOut, SignInButton, UserButton, useUser } from "@clerk/clerk-react";
+import { SignedIn, SignedOut, SignInButton, UserButton, useUser, useAuth } from "@clerk/clerk-react";
 import { ArrowRight, Database, PackageCheck, ShieldCheck } from "lucide-react";
 import RealApp from "./RealApp.jsx";
 
@@ -21,18 +21,18 @@ export default function App({ authEnabled = true }) {
               <p className="mt-5 max-w-lg text-base leading-relaxed text-slate-400">Razdeli artikle, poštnino in plačila med prejemnike ter pripravi jasen PDF obračun.</p>
               <div className="mt-10 grid gap-3 text-sm text-slate-300 sm:grid-cols-3 lg:grid-cols-1">
                 <LoginBenefit icon={PackageCheck}>Samodejni izračuni po teži</LoginBenefit>
-                <LoginBenefit icon={Database}>Zanesljiva lokalna zgodovina</LoginBenefit>
+                <LoginBenefit icon={Database}>Pošiljke na vseh tvojih napravah</LoginBenefit>
                 <LoginBenefit icon={ShieldCheck}>Podatki ostanejo zasebni</LoginBenefit>
               </div>
             </div>
             <div className="flex flex-col justify-center p-8 sm:p-12">
               <p className="eyebrow">Dobrodošel nazaj</p>
               <h2 className="mt-2 text-3xl font-black tracking-tight text-slate-950">Prijava v ACB</h2>
-              <p className="mt-3 text-sm leading-relaxed text-slate-500">Prijavi se z Googlom ali e-pošto. Za vsak račun se uporablja ločena lokalna shramba.</p>
+              <p className="mt-3 text-sm leading-relaxed text-slate-500">Prijavi se z Googlom ali e-pošto. Na vseh napravah uporabi isti račun.</p>
               <SignInButton mode="modal">
                 <button className="button-primary mt-8 w-full justify-center py-3 text-base">Prijavi se <ArrowRight className="h-4 w-4" /></button>
               </SignInButton>
-              <p className="mt-4 text-center text-xs text-slate-400">Prijava je namenjena identifikaciji uporabnika; paketi se ne zapisujejo več v omejene Clerk metapodatke.</p>
+              <p className="mt-4 text-center text-xs text-slate-400">Ko je oblak nastavljen, se pošiljke in osnutek shranjujejo samodejno in zasebno.</p>
             </div>
           </section>
         </main>
@@ -43,13 +43,16 @@ export default function App({ authEnabled = true }) {
 
 function AuthenticatedWorkspace() {
   const { user, isLoaded, isSignedIn } = useUser();
+  const { getToken } = useAuth();
   if (!isLoaded || !isSignedIn) return null;
 
   return (
     <RealApp
+      key={user.id}
       auth={{
         isSignedIn: true,
         userId: user.id,
+        getToken,
         legacyPackages: user.unsafeMetadata?.packages,
         invoiceSettings: user.unsafeMetadata?.invoice,
         userControl: <UserButton appearance={{ elements: { avatarBox: "h-9 w-9" } }} />,

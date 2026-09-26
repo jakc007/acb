@@ -87,6 +87,20 @@ export async function importPackages(ownerId, packages) {
   return listPackages(ownerId);
 }
 
+export async function replacePackages(ownerId, packages) {
+  const database = await openDatabase();
+  const transaction = database.transaction(PACKAGE_STORE, "readwrite");
+  const store = transaction.objectStore(PACKAGE_STORE);
+  const done = transactionDone(transaction);
+  const request = store.index("ownerId").openCursor(ownerId);
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (cursor) { cursor.delete(); cursor.continue(); }
+    else packages.forEach((pkg) => store.put(asRecord(ownerId, pkg)));
+  };
+  await done;
+}
+
 export async function migrateLegacyPackages(ownerId, cloudPackages = []) {
   const localPackages = readJson("RACUN_PACKAGES", []);
   const candidates = [

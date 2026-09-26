@@ -43,10 +43,13 @@ import {
   parseBackup,
   readDraft,
   removePackage,
+  replacePackages,
   savePackage as persistPackage,
   writeDraft,
 } from "./lib/storage.js";
 import { exportPdf } from "./lib/pdfExport.js";
+import { snapshotWorkspace } from "./lib/cloudSync.js";
+import { useCloudSync } from "./lib/useCloudSync.js";
 
 const fmt = formatNumber;
 
@@ -71,8 +74,8 @@ export default function RealApp({ auth = {} }) {
   const [storageState, setStorageState] = useState("loading");
   const [draftState, setDraftState] = useState("saved");
   const [lastSaved, setLastSaved] = useState(null);
-  const [packageName, setPackageName] = useState("");
-  const [editingPackageId, setEditingPackageId] = useState(null);
+  const [packageName, setPackageName] = useState(initialDraft.current.packageName || "");
+  const [editingPackageId, setEditingPackageId] = useState(initialDraft.current.editingPackageId || null);
   const [isSavingPackage, setIsSavingPackage] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
@@ -95,7 +98,19 @@ export default function RealApp({ auth = {} }) {
     invPrefix,
     invCounter,
     exportMode,
-  }), [items, people, origRatio, myRatio, shippingCNY, receivedMap, personOpts, invPrefix, invCounter, exportMode]);
+    packageName,
+    editingPackageId,
+  }), [items, people, origRatio, myRatio, shippingCNY, receivedMap, personOpts, invPrefix, invCounter, exportMode, packageName, editingPackageId]);
+
+  const snapshot = useMemo(() => snapshotWorkspace(packages, draft), [packages, draft]);
+  const cloud = useCloudSync({
+    auth, localReady: storageState === "ready", snapshot,
+    onData: (data) => {
+      setPackages(data.packages.map(hydratePackage));
+      applyDraft(data.draft);
+      void replacePackages(ownerId, data.packages).catch(() => showNotice("Lokalna kopija zgodovine ni uspela; podatki ostajajo v oblaku.", "error"));
+    },
+  });
 
   const namedPeople = useMemo(
     () => [...new Set(people.map((person) => person.trim()).filter(Boolean))],
@@ -128,7 +143,7 @@ export default function RealApp({ auth = {} }) {
     }
     initializeStorage();
     return () => { active = false; };
-  }, [ownerId, auth.legacyPackages]);
+  }, [ownerId]);
 
   useEffect(() => {
     setDraftState("saving");
@@ -139,6 +154,23 @@ export default function RealApp({ auth = {} }) {
     }, 350);
     return () => window.clearTimeout(timer);
   }, [ownerId, draft]);
+
+  useEffect(() => {
+    if (!editingPackageId || !cloud.ready || storageState !== "ready") return;
+    const previous = packages.find((pkg) => pkg.id === editingPackageId);
+    if (!previous) return;
+    const fields = { items, people, origRatio, myRatio, shippingCNY, receivedMap, personOpts, name: packageName.trim() || previous.name };
+    if (Object.entries(fields).every(([key, value]) => JSON.stringify(previous[key]) === JSON.stringify(value))) return;
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      const payload = hydratePackage({ ...previous, ...fields, updatedAt: new Date().toISOString() });
+      try {
+        await persistPackage(ownerId, payload);
+        if (active) setPackages((current) => current.map((pkg) => pkg.id === payload.id ? payload : pkg));
+      } catch { if (active) showNotice("Posodobitev lokalne zgodovine ni uspela. Osnutek je ohranjen.", "error"); }
+    }, 350);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [ownerId, draft, packages, cloud.ready, storageState]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -253,7 +285,7 @@ export default function RealApp({ auth = {} }) {
   }
 
   async function handleSavePackage() {
-    if (storageState !== "ready" || isSavingPackage) return;
+    if (storageState !== "ready" || !cloud.ready || isSavingPackage) return;
     const meaningfulItems = items.filter((item) => item.artikel?.trim() || toNumber(item.cny) || toNumber(item.weight));
     if (!meaningfulItems.length) {
       showNotice("Pred shranjevanjem dodaj vsaj en artikel.", "error");
@@ -288,7 +320,7 @@ export default function RealApp({ auth = {} }) {
       setPackages((current) => [payload, ...current.filter((pkg) => pkg.id !== payload.id)]);
       setEditingPackageId(payload.id);
       setPackageName(payload.name);
-      showNotice(previous ? "Paket je posodobljen." : "Paket je varno shranjen.");
+      showNotice(cloud.enabled ? "Paket je dodan v zgodovino; stanje oblaka je prikazano na vrhu." : previous ? "Paket je posodobljen lokalno." : "Paket je shranjen lokalno.");
     } catch (error) {
       console.error(error);
       showNotice("Shranjevanje ni uspelo. Poskusi znova ali izvozi varnostno kopijo.", "error");
@@ -412,12 +444,22 @@ export default function RealApp({ auth = {} }) {
     setInvPrefix(next.invPrefix);
     setInvCounter(next.invCounter);
     setExportMode(next.exportMode);
-    setEditingPackageId(null);
-    setPackageName("");
+    setEditingPackageId(next.editingPackageId || null);
+    setPackageName(next.packageName || "");
   }
 
   return (
     <div className="min-h-screen bg-[#f4f5f2] text-slate-950">
+      <div className="relative z-40 mx-auto max-w-[1500px] px-4 pt-3" role="status" aria-live="polite">
+        <div className={`rounded-xl border p-3 text-sm ${cloud.status === "saved" ? "border-teal-200 bg-teal-50" : "border-amber-200 bg-amber-50"}`}>
+          <strong>{({ local: "Oblak še ni nastavljen — podatki so samo na tej napravi.", loading: "Povezujem z oblakom …", saved: "Shranjeno v oblaku · samodejna sinhronizacija", pending: "Spremembe čakajo na shranjevanje v oblak …", saving: "Shranjujem v oblak …", error: "Sinhronizacija ni uspela — spremembe še niso potrjene v oblaku.", conflict: "Druga naprava je shranila nove spremembe. Tvoja različica je ohranjena na tej napravi." })[cloud.status]}</strong>
+          {cloud.error && <p className="mt-1">{cloud.error}</p>}
+          {!cloud.ready && auth.userControl && <div className="mt-2 flex items-center gap-2">{auth.userControl}<span>Račun in ponovna prijava</span></div>}
+          {cloud.status === "error" && <button type="button" className="button-secondary ml-3" onClick={cloud.retry}>Poskusi znova</button>}
+          {cloud.status === "conflict" && <><p className="mt-1">Najprej izvozi svojo različico. Nato naloži oblak in po potrebi uvozi posamezne spremembe iz kopije.</p><button type="button" className="button-secondary mt-2" onClick={exportBackup}>Izvozi mojo različico</button><button type="button" className="button-secondary ml-2 mt-2" onClick={() => { if (window.confirm("Si izvozil svojo različico? Lokalni prikaz bo zamenjan s podatki iz oblaka.")) void cloud.useCloud(); }}>Naloži različico iz oblaka</button></>}
+        </div>
+      </div>
+      <fieldset disabled={!cloud.ready} className="min-w-0 border-0 p-0">
       <div className="pointer-events-none fixed inset-x-0 top-0 h-[420px] bg-[radial-gradient(circle_at_top_left,rgba(13,148,136,0.16),transparent_42%),radial-gradient(circle_at_top_right,rgba(245,158,11,0.12),transparent_32%)]" />
       <div className="relative mx-auto max-w-[1500px] px-4 pb-16 pt-4 sm:px-6 lg:px-8">
         <header className="sticky top-3 z-30 rounded-[24px] border border-white/70 bg-white/90 px-4 py-3 shadow-[0_16px_50px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:px-5">
@@ -507,8 +549,8 @@ export default function RealApp({ auth = {} }) {
                       <tr>
                         <TableHead>Artikel</TableHead>
                         <TableHead align="right">Kol.</TableHead>
-                        <TableHead align="right">CNY / kos</TableHead>
                         <TableHead align="right">Teža</TableHead>
+                        <TableHead align="right">CNY / kos</TableHead>
                         <TableHead align="right">Poštnina</TableHead>
                         <TableHead align="right">Skupaj</TableHead>
                         <TableHead>Prejemnik</TableHead>
@@ -520,11 +562,11 @@ export default function RealApp({ auth = {} }) {
                         <tr className="group transition hover:bg-teal-50/30" key={row.id}>
                           <TableCell><input className="table-field min-w-[220px] text-left font-semibold" value={row.artikel} onChange={(event) => updateRow(row.id, "artikel", event.target.value)} placeholder="Ime artikla" aria-label="Ime artikla" /></TableCell>
                           <TableCell align="right"><input type="number" min="1" step="1" className="table-field w-16" value={row.qty} onChange={(event) => updateRow(row.id, "qty", event.target.value)} aria-label="Količina" /></TableCell>
-                          <TableCell align="right"><input type="number" min="0" inputMode="decimal" className="table-field w-24" value={row.cny} onChange={(event) => updateRow(row.id, "cny", event.target.value)} aria-label="Cena v CNY" /></TableCell>
                           <TableCell align="right">
                             <input type="number" min="0" inputMode="decimal" className="table-field w-24" value={row.weight} onChange={(event) => updateRow(row.id, "weight", event.target.value)} aria-label="Teža v gramih" />
                             <div className="mt-1 text-[10px] text-slate-400">{fmt(row.weightPct)} %</div>
                           </TableCell>
+                          <TableCell align="right"><input type="number" min="0" inputMode="decimal" className="table-field w-24" value={row.cny} onChange={(event) => updateRow(row.id, "cny", event.target.value)} aria-label="Cena v CNY" /></TableCell>
                           <TableCell align="right"><span className="font-semibold text-amber-700">{fmt(row.shipPart)} €</span></TableCell>
                           <TableCell align="right"><strong className="text-base text-slate-950">{fmt(row.together)} €</strong><div className="mt-0.5 text-[10px] text-slate-400">redna {fmt(row.regular)} €</div></TableCell>
                           <TableCell><select className="table-field w-32 text-left" value={row.who || ""} onChange={(event) => updateRow(row.id, "who", event.target.value)} aria-label="Prejemnik"><option value="">— brez —</option>{namedPeople.map((person) => <option key={person} value={person}>{person}</option>)}</select></TableCell>
@@ -543,7 +585,7 @@ export default function RealApp({ auth = {} }) {
                         <input className="field flex-1 font-semibold" value={row.artikel} onChange={(event) => updateRow(row.id, "artikel", event.target.value)} placeholder="Ime artikla" />
                         <IconButton icon={Trash2} label="Izbriši vrstico" onClick={() => deleteRow(row.id)} danger />
                       </div>
-                      <div className="grid grid-cols-3 gap-2"><CompactNumber label="Količina" value={row.qty} onChange={(value) => updateRow(row.id, "qty", value)} /><CompactNumber label="CNY / kos" value={row.cny} onChange={(value) => updateRow(row.id, "cny", value)} /><CompactNumber label="Teža (g)" value={row.weight} onChange={(value) => updateRow(row.id, "weight", value)} /></div>
+                      <div className="grid grid-cols-3 gap-2"><CompactNumber label="Količina" value={row.qty} onChange={(value) => updateRow(row.id, "qty", value)} /><CompactNumber label="Teža (g)" value={row.weight} onChange={(value) => updateRow(row.id, "weight", value)} /><CompactNumber label="CNY / kos" value={row.cny} onChange={(value) => updateRow(row.id, "cny", value)} /></div>
                       <div className="flex items-end justify-between gap-3 rounded-2xl bg-slate-50 p-3">
                         <label className="min-w-0 flex-1 text-xs font-bold text-slate-500">Prejemnik<select className="field mt-1 h-9 w-full text-sm" value={row.who || ""} onChange={(event) => updateRow(row.id, "who", event.target.value)}><option value="">— brez —</option>{namedPeople.map((person) => <option key={person} value={person}>{person}</option>)}</select></label>
                         <div className="text-right"><div className="text-[10px] uppercase tracking-wide text-slate-400">Skupaj</div><strong>{fmt(row.together)} €</strong></div>
@@ -564,25 +606,32 @@ export default function RealApp({ auth = {} }) {
                 <Panel title="Povzetek po osebi" eyebrow="Plačila in marža" icon={Users} roomy>
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[760px] text-sm">
-                      <thead className="text-[10px] uppercase tracking-[0.08em] text-slate-400"><tr><TableHead>Oseba</TableHead><TableHead align="right">Osnova</TableHead><TableHead>Obračun</TableHead><TableHead align="right">Faktor</TableHead><TableHead align="right">Končna cena</TableHead><TableHead align="right">Prejeto</TableHead><TableHead align="right">Preostane</TableHead></tr></thead>
+                      <thead className="text-[10px] uppercase tracking-[0.08em] text-slate-400"><tr><TableHead>Oseba</TableHead><TableHead align="right">Osnova</TableHead><TableHead>Obračun</TableHead><TableHead align="right">Faktor</TableHead><TableHead align="right">Končna cena</TableHead><TableHead align="right">Prejeto</TableHead><TableHead align="right">Preostane</TableHead><TableHead align="right">Profit</TableHead></tr></thead>
                       <tbody className="divide-y divide-slate-100">
                         {metrics.summaryByPerson.map((row) => {
                           const options = personOpts[row.who] || { fee: 1, mode: "eur" };
                           return (
                             <tr key={row.who}>
-                              <TableCell><strong>{row.who}</strong><div className="text-[10px] text-slate-400">minimum {fmt(row.minimum)} €</div></TableCell>
+                              <TableCell><strong>{row.who}</strong><div className="text-[10px] text-slate-400">nabava {fmt(row.cost)} €</div></TableCell>
                               <TableCell align="right">{fmt(row.eur)} €</TableCell>
                               <TableCell><select className="table-field w-24 text-left" value={options.mode || "eur"} onChange={(event) => setPersonOpts((current) => ({ ...current, [row.who]: { ...options, mode: event.target.value } }))}><option value="eur">Skupaj</option><option value="redna">Redna</option></select></TableCell>
                               <TableCell align="right"><input type="number" min="0" step="0.01" className="table-field w-20" value={options.fee ?? 1} onChange={(event) => setPersonOpts((current) => ({ ...current, [row.who]: { ...options, fee: event.target.value } }))} /></TableCell>
                               <TableCell align="right"><strong>{fmt(row.charge)} €</strong></TableCell>
                               <TableCell align="right"><input type="number" min="0" inputMode="decimal" className="table-field w-24 border-teal-200 bg-teal-50/60" value={receivedMap[row.who] ?? ""} onChange={(event) => setReceivedMap((current) => ({ ...current, [row.who]: event.target.value }))} placeholder="0,00" /></TableCell>
                               <TableCell align="right"><span className={`font-black ${row.due > 0.005 ? "text-rose-600" : "text-emerald-600"}`}>{fmt(row.due)} €</span></TableCell>
+                              <TableCell align="right"><strong className={row.profitReceived < 0 ? "text-rose-600" : "text-emerald-700"}>{fmt(row.profitReceived)} €</strong><div className="text-[10px] text-slate-400">načrtovan {fmt(row.profitPlanned)} €</div></TableCell>
                             </tr>
                           );
                         })}
                       </tbody>
                     </table>
                   </div>
+                  <div className="mt-4 grid gap-3 rounded-xl bg-slate-50 p-4 sm:grid-cols-3">
+                    <PreviewStat label="Nabavni strošek paketa" value={`${fmt(metrics.totalCost)} €`} />
+                    <PreviewStat label="Skupaj prejeto" value={`${fmt(metrics.totalReceived)} €`} />
+                    <PreviewStat label="Skupen profit paketa" value={`${fmt(metrics.totalProfitReceived)} €`} />
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">Profit = prejeto − nabava s poštnino po originalnem tečaju. Načrtovan profit paketa: {fmt(metrics.totalProfitPlanned)} €. Neplačani in nedodeljeni artikli so vključeni v strošek paketa.</p>
                   {!metrics.summaryByPerson.length && <p className="py-8 text-center text-sm text-slate-400">Dodaj osebo, da se prikaže razdelitev.</p>}
                 </Panel>
 
@@ -593,7 +642,7 @@ export default function RealApp({ auth = {} }) {
                       {isSavingPackage ? <Spinner /> : editingPackageId ? <PencilLine className="h-4 w-4" /> : <Save className="h-4 w-4" />}
                       {isSavingPackage ? "Shranjujem …" : editingPackageId ? "Posodobi paket" : "Shrani paket"}
                     </button>
-                    <div className="mt-3 flex items-start gap-2 rounded-xl bg-teal-50 p-3 text-xs leading-relaxed text-teal-900"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /><span>Podatki se shranijo v lokalno bazo brskalnika brez omejitve Clerk metapodatkov. Za prenos med napravami uporabi varnostno kopijo.</span></div>
+                    <div className="mt-3 flex items-start gap-2 rounded-xl bg-teal-50 p-3 text-xs leading-relaxed text-teal-900"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /><span>{cloud.enabled ? "Osnutek in zgodovina se samodejno shranjujeta v oblak. Gumb shrani poimenovan paket v zgodovino. Na drugi napravi se prijavi z istim računom; podatki se osvežijo najpozneje v 15 sekundah." : "Oblak še ni nastavljen. Osnutek in zgodovina se shranjujeta samo lokalno. Za nastavitev sledi navodilom v repozitoriju."}</span></div>
                   </Panel>
 
                   <Panel title="PDF izvoz" eyebrow="Povzetek ali računi" icon={FileDown}>
@@ -612,7 +661,7 @@ export default function RealApp({ auth = {} }) {
         </main>
 
         <footer className="mt-10 flex flex-col items-center justify-between gap-3 border-t border-slate-200/80 py-6 text-xs text-slate-500 sm:flex-row">
-          <span>ACB · lokalno in pregledno upravljanje pošiljk</span>
+          <span>ACB · pregledno upravljanje pošiljk</span>
           <span className="flex items-center gap-2"><Database className="h-3.5 w-3.5" /> {storageState === "ready" ? `${packages.length} shranjenih paketov` : storageState === "loading" ? "Odpiram shrambo …" : "Shramba ni na voljo"}</span>
         </footer>
       </div>
@@ -667,6 +716,7 @@ export default function RealApp({ auth = {} }) {
 
       {previewPackage && <PackagePreview pkg={previewPackage} onClose={() => setPreviewPackage(null)} onLoad={() => loadPackage(previewPackage)} onCopy={() => loadPackage(previewPackage, true)} />}
       {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
+      </fieldset>
     </div>
   );
 }
@@ -742,7 +792,7 @@ function SearchField({ value, onChange, placeholder }) {
 function StatusLabel({ state, lastSaved }) {
   if (state === "saving") return <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />Shranjujem osnutek …</span>;
   if (state === "error") return <span className="flex items-center gap-1.5 text-rose-600"><span className="h-1.5 w-1.5 rounded-full bg-rose-500" />Osnutek ni shranjen</span>;
-  return <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Osnutek shranjen{lastSaved ? ` ob ${lastSaved.toLocaleTimeString("sl-SI", { hour: "2-digit", minute: "2-digit" })}` : ""}</span>;
+  return <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Lokalna kopija osnutka{lastSaved ? ` ob ${lastSaved.toLocaleTimeString("sl-SI", { hour: "2-digit", minute: "2-digit" })}` : ""}</span>;
 }
 
 function Drawer({ title, subtitle, icon: Icon, onClose, children, wide = false }) {
@@ -751,7 +801,7 @@ function Drawer({ title, subtitle, icon: Icon, onClose, children, wide = false }
 
 function PackagePreview({ pkg, onClose, onLoad, onCopy }) {
   const rows = pkg.derived.rows;
-  return <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/50 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section role="dialog" aria-modal="true" className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-[26px] bg-white shadow-2xl"><header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6"><div><p className="eyebrow">{new Date(pkg.updatedAt || pkg.createdAt).toLocaleString("sl-SI")}</p><h2 className="mt-1 text-xl font-black">{pkg.name}</h2></div><div className="flex gap-2"><button type="button" onClick={onCopy} className="button-secondary"><Copy className="h-4 w-4" /> Kot kopijo</button><button type="button" onClick={onLoad} className="button-primary"><PencilLine className="h-4 w-4" /> Uredi</button><IconButton icon={X} label="Zapri" onClick={onClose} /></div></header><div className="overflow-y-auto p-5 sm:p-6"><div className="mb-5 grid gap-3 sm:grid-cols-4"><PreviewStat label="Skupaj" value={`${fmt(pkg.derived.grandTogether)} €`} /><PreviewStat label="Vrednost" value={`${fmt(pkg.derived.totalCNY)} CNY`} /><PreviewStat label="Teža" value={`${fmt(pkg.derived.totalWeight)} g`} /><PreviewStat label="Poštnina" value={`${fmt(pkg.derived.shippingEUR)} €`} /></div><div className="overflow-x-auto rounded-2xl border border-slate-200"><table className="w-full min-w-[720px] text-sm"><thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500"><tr><TableHead>Artikel</TableHead><TableHead align="right">Količina</TableHead><TableHead align="right">CNY</TableHead><TableHead align="right">Teža</TableHead><TableHead align="right">Poštnina</TableHead><TableHead align="right">Skupaj</TableHead><TableHead>Oseba</TableHead></tr></thead><tbody className="divide-y divide-slate-100">{rows.map((row) => <tr key={row.id}><TableCell><strong>{row.artikel}</strong></TableCell><TableCell align="right">{fmt(row.qty)}</TableCell><TableCell align="right">{fmt(row.cnyTotal)}</TableCell><TableCell align="right">{fmt(row.weightTotal)} g</TableCell><TableCell align="right">{fmt(row.shipPart)} €</TableCell><TableCell align="right"><strong>{fmt(row.together)} €</strong></TableCell><TableCell>{row.who || "—"}</TableCell></tr>)}</tbody></table></div></div></section></div>;
+  return <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/50 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section role="dialog" aria-modal="true" className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-[26px] bg-white shadow-2xl"><header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6"><div><p className="eyebrow">{new Date(pkg.updatedAt || pkg.createdAt).toLocaleString("sl-SI")}</p><h2 className="mt-1 text-xl font-black">{pkg.name}</h2></div><div className="flex gap-2"><button type="button" onClick={onCopy} className="button-secondary"><Copy className="h-4 w-4" /> Kot kopijo</button><button type="button" onClick={onLoad} className="button-primary"><PencilLine className="h-4 w-4" /> Uredi</button><IconButton icon={X} label="Zapri" onClick={onClose} /></div></header><div className="overflow-y-auto p-5 sm:p-6"><div className="mb-5 grid gap-3 sm:grid-cols-4"><PreviewStat label="Skupaj" value={`${fmt(pkg.derived.grandTogether)} €`} /><PreviewStat label="Vrednost" value={`${fmt(pkg.derived.totalCNY)} CNY`} /><PreviewStat label="Teža" value={`${fmt(pkg.derived.totalWeight)} g`} /><PreviewStat label="Profit paketa" value={`${fmt(pkg.derived.totalProfitReceived)} €`} /></div><div className="overflow-x-auto rounded-2xl border border-slate-200"><table className="w-full min-w-[720px] text-sm"><thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500"><tr><TableHead>Artikel</TableHead><TableHead align="right">Količina</TableHead><TableHead align="right">Teža</TableHead><TableHead align="right">CNY</TableHead><TableHead align="right">Poštnina</TableHead><TableHead align="right">Skupaj</TableHead><TableHead>Oseba</TableHead></tr></thead><tbody className="divide-y divide-slate-100">{rows.map((row) => <tr key={row.id}><TableCell><strong>{row.artikel}</strong></TableCell><TableCell align="right">{fmt(row.qty)}</TableCell><TableCell align="right">{fmt(row.weightTotal)} g</TableCell><TableCell align="right">{fmt(row.cnyTotal)}</TableCell><TableCell align="right">{fmt(row.shipPart)} €</TableCell><TableCell align="right"><strong>{fmt(row.together)} €</strong></TableCell><TableCell>{row.who || "—"}</TableCell></tr>)}</tbody></table></div></div></section></div>;
 }
 
 function PreviewStat({ label, value }) {
