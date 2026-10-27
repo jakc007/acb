@@ -50,7 +50,7 @@ test("offline edits survive reload, then retry automatically", async () => {
   const write = api.write;
   api.write = async () => { throw new Error("Offline"); };
   await a.engine.sync();
-  assert.equal(a.status(), "error"); assert.equal(a.cache().pending, true);
+  assert.equal(a.status(), "offline"); assert.equal(a.cache().pending, true);
   api.write = write;
   const b = device(api, a.cache()); await b.engine.start(workspace());
   assert.equal((await api.read()).data.draft.packageName, "Offline");
@@ -65,6 +65,116 @@ test("pending cache on a stale device is preserved across reload", async () => {
   const reloaded = device(api, b.cache()); await reloaded.engine.start(workspace());
   assert.equal(reloaded.status(), "conflict");
   assert.equal(reloaded.visible().draft.packageName, "Pending");
+});
+
+test("a first-time device remains editable when its first cloud request fails", async () => {
+  let writes = 0;
+  const api = { read: async () => { throw new TypeError("Failed to fetch"); }, write: async () => { writes++; } };
+  const a = device(api);
+  await a.engine.start(workspace());
+  assert.equal(a.engine.ready, true);
+  assert.equal(a.status(), "offline");
+  assert.deepEqual(a.visible(), workspace());
+  a.engine.change(workspace("Nov lokalni osnutek"));
+  assert.equal(a.cache().data.draft.packageName, "Nov lokalni osnutek");
+  assert.equal(a.cache().unverified, true);
+  await a.engine.sync();
+  assert.equal(writes, 0);
+});
+
+test("offline first-run cache survives reload and merges cloud packages before writing", async () => {
+  const api = server();
+  const remote = { packages: [{ id: "cloud", name: "Cloud package" }], draft: { items: [{ artikel: "Oblačni artikel" }] } };
+  await api.write(0, remote);
+  const read = api.read;
+  api.read = async () => { throw new TypeError("Failed to fetch"); };
+  const a = device(api); await a.engine.start(workspace());
+  const local = { packages: [{ id: "local", name: "Local package" }], draft: { items: [{ artikel: "Lokalni artikel" }] } };
+  a.engine.change(local);
+  const b = device(api, a.cache()); await b.engine.start(workspace());
+  assert.equal(b.engine.ready, true);
+  assert.deepEqual(b.visible(), local);
+  api.read = read;
+  await b.engine.sync();
+  const saved = (await api.read()).data;
+  assert.equal(saved.packages.find((pkg) => pkg.id === "cloud").name, "Cloud package");
+  assert.equal(saved.packages.find((pkg) => pkg.id === "local").name, "Local package");
+  assert.equal(saved.packages.find((pkg) => pkg.name === "Ohranjen osnutek iz oblaka").items[0].artikel, "Oblačni artikel");
+  assert.equal(saved.draft.items[0].artikel, "Lokalni artikel");
+  assert.equal(b.status(), "saved");
+  assert.equal(b.cache().unverified, false);
+});
+
+test("reloading a first-run offline cache after reconnect also preserves both drafts", async () => {
+  const api = server();
+  const remote = { packages: [{ id: "existing" }], draft: { items: [{ artikel: "Remote" }] } };
+  await api.write(0, remote);
+  const local = { packages: [{ id: "offline" }], draft: { items: [{ artikel: "Local" }] } };
+  const a = device(api, { revision: 0, data: local, pending: true, unverified: true });
+  await a.engine.start(workspace());
+  const saved = (await api.read()).data;
+  assert.equal(saved.draft.items[0].artikel, "Local");
+  assert.equal(saved.packages.length, 3);
+  assert.equal(a.status(), "saved");
+});
+
+test("typing during first reconnect is merged using the latest local input", async () => {
+  const api = server();
+  await api.write(0, { packages: [{ id: "remote" }], draft: { items: [] } });
+  const read = api.read;
+  api.read = async () => { throw new TypeError("Failed to fetch"); };
+  const a = device(api); await a.engine.start(workspace());
+  let release;
+  api.read = () => new Promise((resolve) => { release = async () => resolve(await read()); });
+  const syncing = a.engine.sync();
+  a.engine.change(workspace("Typed while reconnecting"));
+  await release(); await syncing;
+  const saved = await read();
+  assert.equal(saved.data.draft.packageName, "Typed while reconnecting");
+  assert.equal(saved.data.packages[0].id, "remote");
+  assert.equal(a.status(), "saved");
+});
+
+test("cached devices remain editable offline and stale changes still require a conflict", async () => {
+  const api = server(), a = device(api), b = device(api);
+  await a.engine.start(workspace()); await b.engine.start(workspace());
+  const cached = b.cache();
+  a.engine.change(workspace("Other device")); await a.engine.sync();
+  const read = api.read;
+  api.read = async () => { throw new TypeError("Failed to fetch"); };
+  const reloaded = device(api, cached); await reloaded.engine.start(workspace());
+  assert.equal(reloaded.engine.ready, true);
+  reloaded.engine.change(workspace("Cached offline edits"));
+  assert.equal(reloaded.cache().unverified, false);
+  api.read = read; await reloaded.engine.sync();
+  assert.equal(reloaded.status(), "conflict");
+  assert.equal((await api.read()).data.draft.packageName, "Other device");
+  assert.equal(reloaded.cache().data.draft.packageName, "Cached offline edits");
+});
+
+test("a new offline device with no edits adopts the cloud draft on reconnect", async () => {
+  const api = server();
+  await api.write(0, workspace("Existing cloud draft"));
+  const read = api.read;
+  api.read = async () => { throw new TypeError("Failed to fetch"); };
+  const a = device(api); await a.engine.start(workspace());
+  api.read = read; await a.engine.sync();
+  assert.equal(a.visible().draft.packageName, "Existing cloud draft");
+  assert.equal((await api.read()).revision, 1);
+});
+
+test("offline package collisions keep the editor pointing to the local copy", () => {
+  const local = { packages: [{ id: "p", name: "Local" }], draft: { items: [], editingPackageId: "p", packageName: "Local" } };
+  const remote = { packages: [{ id: "p", name: "Remote" }], draft: { items: [] } };
+  const merged = migrateWorkspace(local, remote, () => "local-copy", { preferLocalDraft: true });
+  assert.equal(merged.packages.find((pkg) => pkg.id === "p").name, "Remote");
+  assert.equal(merged.draft.editingPackageId, "local-copy");
+  assert.equal(merged.draft.packageName, "Local – lokalna kopija");
+});
+
+test("network failures give an actionable explanation instead of Failed to fetch", async () => {
+  const api = createCloudApi({ url: "https://test.supabase.co", key: "public", getToken: async () => "token", fetcher: async () => { throw new TypeError("Failed to fetch"); } });
+  await assert.rejects(api.read(), /Resume project/);
 });
 
 test("a failed conflict reload still allows another cloud reload", async () => {

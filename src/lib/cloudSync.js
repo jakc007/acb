@@ -3,11 +3,16 @@ export function createCloudApi({ url, key, getToken, fetcher = fetch }) {
   async function request(path, options = {}) {
     const token = await getToken();
     if (!token) throw new Error("Za sinhronizacijo se ponovno prijavi.");
-    const response = await fetcher(`${url.replace(/\/$/, "")}/rest/v1/${path}`, {
-      ...options,
-      headers: { apikey: key, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(15000),
-    });
+    let response;
+    try {
+      response = await fetcher(`${url.replace(/\/$/, "")}/rest/v1/${path}`, {
+        ...options,
+        headers: { apikey: key, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch {
+      throw new Error("Povezava s Supabase ni uspela. Preveri internet; če je brezplačni projekt ustavljen, ga v Supabase nadzorni plošči nadaljuj z »Resume project«. Do povezave lahko delaš lokalno.");
+    }
     if (!response.ok) throw new Error(`Oblak ni dosegljiv (${response.status}). Preveri povezavo in nastavitev Supabase.`);
     return response.json();
   }
@@ -37,21 +42,27 @@ export function stableStringify(value) {
 }
 const same = (a, b) => stableStringify(a) === stableStringify(b);
 
-export function migrateWorkspace(local, remote, makeId) {
+export function migrateWorkspace(local, remote, makeId, { preferLocalDraft = false } = {}) {
   if (!remote) return local;
   const packages = [...remote.packages];
+  let draft = preferLocalDraft ? local.draft : remote.draft;
   const ids = new Set(packages.map((pkg) => pkg.id));
   for (const pkg of local.packages) {
     if (!ids.has(pkg.id)) { packages.push(pkg); ids.add(pkg.id); }
     else if (!same(packages.find((p) => p.id === pkg.id), pkg)) {
-      packages.push({ ...pkg, id: makeId(), name: `${pkg.name} – lokalna kopija` });
+      const copy = { ...pkg, id: makeId(), name: `${pkg.name} – lokalna kopija` };
+      packages.push(copy);
+      if (preferLocalDraft && draft.editingPackageId === pkg.id) {
+        draft = { ...draft, editingPackageId: copy.id, packageName: copy.name };
+      }
     }
   }
-  if (local.draft.items?.some((item) => item.artikel?.trim() || Number(item.cny) || Number(item.weight)) && !same(local.draft, remote.draft)) {
+  const preservedDraft = preferLocalDraft ? remote.draft : local.draft;
+  if (preservedDraft.items?.some((item) => item.artikel?.trim() || Number(item.cny) || Number(item.weight)) && !same(local.draft, remote.draft)) {
     const now = new Date().toISOString();
-    packages.push({ ...local.draft, id: makeId(), name: "Uvožen osnutek s te naprave", createdAt: now, updatedAt: now });
+    packages.push({ ...preservedDraft, id: makeId(), name: preferLocalDraft ? "Ohranjen osnutek iz oblaka" : "Uvožen osnutek s te naprave", createdAt: now, updatedAt: now });
   }
-  return { packages, draft: remote.draft };
+  return { packages, draft };
 }
 
 export class WorkspaceSync {
@@ -60,33 +71,54 @@ export class WorkspaceSync {
     this.revision = 0;
     this.pending = false;
     this.ready = false;
+    this.unverified = false;
+    this.offline = false;
     this.stopped = false;
   }
   persist() {
-    this.cache.write({ revision: this.revision, data: this.data, pending: this.pending });
+    this.cache.write({ revision: this.revision, data: this.data, pending: this.pending, unverified: this.unverified });
   }
   async start(local) {
     this.local = local;
     if (this.busy || this.stopped) return;
     this.busy = true;
     this.onStatus("loading");
+    let cached;
+    let connected = false;
     try {
-      const cached = this.cache.read();
+      cached = this.cache.read();
       const remote = await this.api.read();
       if (this.stopped) return;
-      this.revision = cached?.pending ? cached.revision : remote.revision;
-      this.data = cached?.pending ? cached.data : cached ? remote.data || cached.data : migrateWorkspace(local, remote.data, this.makeId);
+      const firstConnection = cached?.unverified;
+      this.revision = cached?.pending && !firstConnection ? cached.revision : remote.revision;
+      this.data = firstConnection
+        ? migrateWorkspace(cached.data, remote.data, this.makeId, { preferLocalDraft: cached.pending })
+        : cached?.pending ? cached.data : cached ? remote.data || cached.data : migrateWorkspace(local, remote.data, this.makeId);
       this.pending = !same(this.data, remote.data);
-      this.conflict = !!(cached?.pending && cached.revision !== remote.revision && this.pending);
+      this.conflict = !!(cached?.pending && !firstConnection && cached.revision !== remote.revision && this.pending);
       if (!this.pending) this.revision = remote.revision;
       this.persist();
       this.ready = true;
       this.onData(this.data);
+      connected = true;
+      this.offline = false;
       this.onStatus(this.conflict ? "conflict" : this.pending ? "pending" : "saved");
     } catch (error) {
-      if (!this.stopped) this.onStatus("error", error.message);
+      if (!this.stopped) {
+        this.offline = true;
+        if (!this.ready) {
+          this.data = cached?.data || local;
+          this.revision = cached?.revision || 0;
+          this.pending = cached?.pending || false;
+          this.unverified = !cached || !!cached.unverified;
+          this.ready = true;
+          // Keep the workspace usable even when its first cloud request fails.
+          this.onData(this.data);
+        }
+        this.onStatus("offline", error.message);
+      }
     } finally { this.busy = false; }
-    if (this.ready && !this.conflict) await this.sync();
+    if (connected && !this.conflict) await this.sync();
   }
   change(data) {
     if (!this.ready || this.stopped || same(this.data, data)) return;
@@ -94,13 +126,25 @@ export class WorkspaceSync {
     this.pending = true;
     try { this.persist(); }
     catch { this.onStatus("error", "Lokalna varnostna kopija ni uspela. Izvozi JSON pred zapiranjem."); return; }
-    this.onStatus(this.conflict ? "conflict" : "pending");
+    this.onStatus(this.conflict ? "conflict" : this.offline || this.unverified ? "offline" : "pending");
   }
   async sync() {
     if (this.stopped || this.busy || this.conflict) return;
     if (!this.ready) return this.start(this.local);
     this.busy = true;
     try {
+      if (this.unverified) {
+        // A new/offline device has no revision to write against. Read and merge
+        // existing cloud data before its first write; preserve both drafts.
+        const remote = await this.api.read();
+        if (this.stopped) return;
+        this.data = migrateWorkspace(this.data, remote.data, this.makeId, { preferLocalDraft: this.pending });
+        this.revision = remote.revision;
+        this.unverified = false;
+        this.pending = !same(this.data, remote.data);
+        this.persist();
+        this.onData(this.data);
+      }
       if (this.pending) {
         const sent = this.data;
         this.onStatus("saving");
@@ -135,9 +179,10 @@ export class WorkspaceSync {
           this.onData(this.data);
         }
       }
+      this.offline = false;
       this.onStatus(this.pending ? "pending" : "saved");
     } catch (error) {
-      if (!this.stopped) this.onStatus("error", error.message);
+      if (!this.stopped) { this.offline = true; this.onStatus("offline", error.message); }
     } finally { this.busy = false; }
   }
   async useCloud() {

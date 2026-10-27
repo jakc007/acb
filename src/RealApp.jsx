@@ -452,10 +452,12 @@ export default function RealApp({ auth = {} }) {
     <div className="min-h-screen bg-[#f4f5f2] text-slate-950">
       <div className="relative z-40 mx-auto max-w-[1500px] px-4 pt-3" role="status" aria-live="polite">
         <div className={`rounded-xl border p-3 text-sm ${cloud.status === "saved" ? "border-teal-200 bg-teal-50" : "border-amber-200 bg-amber-50"}`}>
-          <strong>{({ local: "Oblak še ni nastavljen — podatki so samo na tej napravi.", loading: "Povezujem z oblakom …", saved: "Shranjeno v oblaku · samodejna sinhronizacija", pending: "Spremembe čakajo na shranjevanje v oblak …", saving: "Shranjujem v oblak …", error: "Sinhronizacija ni uspela — spremembe še niso potrjene v oblaku.", conflict: "Druga naprava je shranila nove spremembe. Tvoja različica je ohranjena na tej napravi." })[cloud.status]}</strong>
+          <strong>{({ local: "Oblak še ni nastavljen — podatki so samo na tej napravi.", loading: "Povezujem z oblakom …", saved: "Shranjeno v oblaku · samodejna sinhronizacija", pending: "Spremembe čakajo na shranjevanje v oblak …", saving: "Shranjujem v oblak …", offline: "Delaš lokalno — oblak trenutno ni dosegljiv.", error: "Sinhronizacija ni uspela — spremembe še niso potrjene v oblaku.", conflict: "Druga naprava je shranila nove spremembe. Tvoja različica je ohranjena na tej napravi." })[cloud.status]}</strong>
+          {cloud.status === "offline" && <p className="mt-1">Lahko ustvariš nov osnutek in shranjuješ pakete na tej napravi. Po obnovi povezave jih bomo varno povezali z oblakom; do takrat niso na voljo na drugih napravah.</p>}
           {cloud.error && <p className="mt-1">{cloud.error}</p>}
           {!cloud.ready && auth.userControl && <div className="mt-2 flex items-center gap-2">{auth.userControl}<span>Račun in ponovna prijava</span></div>}
-          {cloud.status === "error" && <button type="button" className="button-secondary ml-3" onClick={cloud.retry}>Poskusi znova</button>}
+          {(cloud.status === "error" || cloud.status === "offline") && <button type="button" className="button-secondary ml-3" onClick={cloud.retry}>Poskusi znova</button>}
+          {cloud.status === "offline" && <a className="button-secondary ml-3 mt-2" href="https://supabase.com/dashboard" target="_blank" rel="noreferrer">Odpri Supabase</a>}
           {cloud.status === "conflict" && <><p className="mt-1">Najprej izvozi svojo različico. Nato naloži oblak in po potrebi uvozi posamezne spremembe iz kopije.</p><button type="button" className="button-secondary mt-2" onClick={exportBackup}>Izvozi mojo različico</button><button type="button" className="button-secondary ml-2 mt-2" onClick={() => { if (window.confirm("Si izvozil svojo različico? Lokalni prikaz bo zamenjan s podatki iz oblaka.")) void cloud.useCloud(); }}>Naloži različico iz oblaka</button></>}
         </div>
       </div>
